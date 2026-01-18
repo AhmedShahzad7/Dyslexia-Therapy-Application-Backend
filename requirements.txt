@@ -3,3 +3,5 @@ tensorflow
 pandas
 matplotlib
 google-genai
+firebase-admin
+python-dotenv
