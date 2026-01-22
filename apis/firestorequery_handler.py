@@ -17,6 +17,32 @@ def store_direction_error(user_id, direction_predicted,question_number):
 
     elif (question_number == "3") and (direction_predicted != "Down"):
         field_path = "error.Direction.Down" 
+    elif (question_number == "4"):
+        # 1. Ignore Success Messages
+        # If it is "Completed" or "Correct Match...", we return True (no error to log)
+        if direction_predicted == "Completed" or "Correct Match" in direction_predicted:
+            return True
+
+        # 2. Extract Arrow Name from Error String
+        # Input format: "Error: Arrow(Up) matched with Word(Down)"
+        if "Arrow(" in direction_predicted:
+            # Extract the word between "Arrow(" and ")"
+            start = direction_predicted.find("Arrow(") + 6
+            end = direction_predicted.find(")", start)
+            
+            if start > 5 and end > start:
+                extracted_direction = direction_predicted[start:end] # Becomes "Up", "Down", "Left", "Right"
+                direction_key = extracted_direction.capitalize() # Ensure format "Up"
+        
+        # 3. Map to Database Path
+        if direction_key in ["Up", "Down", "Left", "Right"]:
+             field_path = f"error.Direction.{direction_key}"
+        else:
+            # If we couldn't parse a valid direction, do nothing
+            return True
+    elif (question_number == "5") and (direction_key != "Completed"):
+        field_path = "error.Direction.Left"
+    
     if not field_path:
         return True
     try:
@@ -53,6 +79,31 @@ def store_direction_error(user_id, direction_predicted,question_number):
             field_path = f"error.Direction.Left"
         elif(question_number==3) and direction_predicted!="Down":
             field_path = f"error.Direction.Down" 
+        elif (question_number == "4"):
+            # 1. Check if it is a success message (Don't log error)
+            if direction_predicted == "Completed" or "Correct Match" in direction_predicted:
+                pass 
+            
+            # 2. Extract and Log Error
+            else:
+                target_key = None
+                
+                # Check for "Error: Arrow(X)..." format
+                if "Arrow(" in direction_predicted:
+                    start = direction_predicted.find("Arrow(") + 6
+                    end = direction_predicted.find(")", start)
+                    if start > 5 and end > start:
+                        target_key = direction_predicted[start:end].capitalize()
+                
+                # Fallback: Check if the simple string is in the keys (e.g. just "Up")
+                elif direction_key in ["Up", "Down", "Left", "Right"]:
+                    target_key = direction_key
+
+                # Update the initial data if we found a valid key
+                if target_key and target_key in initial_data["error"]["Direction"]:
+                    initial_data["error"]["Direction"][target_key] = True
+        elif (question_number == "5") and (direction_predicted != "Completed"):
+            initial_data["error"]["Direction"]["Left"] = True
         else:
             initial_data["error"]["Direction"][direction_key] = True
             

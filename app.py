@@ -60,9 +60,45 @@ def predict_direction_mcq():
         update_success = store_direction_error(user_id, arrow_selected,question_number)
         print(update_success)
     return "error"
-
-
+# DIRECTION MATCHING (ALEVEL 1 QUESTION 4)
+@app.route("/predict_q4", methods=["POST"])
+def predict_q4():
+    user_id = request.form.get('user_id')
+    question_number = request.form.get('question_number', "4") 
     
+    # This receives: "Completed", "Correct Match: UP", or "Error: ..."
+    arrow_selected = request.form.get('arrow_selected') 
+    
+    if user_id:
+        
+        print(f"\n(DEBUG) Assessment Level 1 Question {question_number} RECEIVED REQUEST!! USERID: {user_id},QUESTION NUMBER: {question_number}, USER_INPUT: {arrow_selected}\n")
+     
+        # Store the status in Firebase
+        update_success = store_direction_error(user_id, arrow_selected, question_number)
+        
+        if update_success:
+            return "Success"
+        else:
+            return "Database Error"
+
+    return "error: missing user_id"
+# DIRECTION MATCHING (ALEVEL 1 QUESTION 5)
+@app.route("/predict_q5", methods=["POST"])
+def predict_q5():
+    user_id = request.form.get('user_id')
+    question_number = "5"
+    arrow_selected = request.form.get('arrow_selected') 
+    if user_id:
+        print(f"\n(DEBUG) Q5 LEFT FOOT RECEIVED: User={user_id}, Status={arrow_selected}\n")
+        
+        update_success = store_direction_error(user_id, arrow_selected, question_number)
+        
+        if update_success:
+            return "Success"
+        else:
+            return "Database Error"
+    return "error"
 
 if __name__ == "__main__":
-    app.run(host='192.168.1.2', port=5000)
+    app.run(host='0.0.0.0', port=5000)
+
