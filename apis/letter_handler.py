@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from google import genai
 
 
-client = genai.Client(api_key="AIzaSyBT0alA9j4koF6ihAplZLLrCxryYfUTo4A")
+client = genai.Client(api_key="AIzaSyDaWzT6RxWJ2O8KO5K0sNBK59iwOdoQYU4")
 def g_handler_direction(img):
     prompt = (
         "You will be our Arrow Direction identifier you will detect which hand-drawn arrow  is shown in the image and it should only be 1 word(only english word if you see something else put -) answer from you for example if the image shows UP arrow then you will say Up if its Left then you will say Left"

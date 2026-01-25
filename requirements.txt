@@ -5,3 +5,7 @@ matplotlib
 google-genai
 firebase-admin
 python-dotenv
+transformers
+torch
+torchvision
+torchaudio

@@ -111,3 +111,6 @@ def store_direction_error(user_id, direction_predicted,question_number):
         doc_ref.set(initial_data)
         
     return True
+
+
+

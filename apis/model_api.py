@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from google import genai
-
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from apis.letter_handler import g_handler_direction
 from apis.letter_handler import g_handler_letter
 
@@ -45,7 +45,7 @@ def letter_predict(img):
     confidence = np.max(predictions)
     
     #HIDE GEMINI CODE ##
-    print(g_handler_letter(img)) 
+    # print(g_handler_letter(img)) 
     
     return ({"prediction": {predicted_class,confidence}})
 
@@ -64,3 +64,19 @@ def direction_predict(img):
     # Predict
     return g_handler_direction(img)
  
+
+def predict_handwriting(image):
+    # 1. Load the processor and model from Hugging Face
+    # 'processor' handles image resizing/normalization and text decoding
+    processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-handwritten')
+    model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-handwritten')
+
+    # 3. Preprocess the image into pixel values (tensors)
+    pixel_values = processor(images=image, return_tensors="pt").pixel_values
+
+    # 4. Generate text (inference)
+    # The model generates token IDs which we then decode into text
+    generated_ids = model.generate(pixel_values)
+    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+    return generated_text
