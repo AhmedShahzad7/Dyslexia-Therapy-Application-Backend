@@ -18,7 +18,7 @@ from apis.model_api import predict_handwriting
 from apis.letter_handler import g_handler_letter
 from apis.firestorequery_handler import store_direction_error
 from apis.firestorequery_handler import store_mcq_error
-
+from apis.firestorequery_handler import store_cartoon_selection
 
 
 
@@ -501,6 +501,24 @@ def predict_handwriting_batch():
             return f"Server Error: {e}", 500
 
     return "Missing Data", 400
+
+# CARTOON SELECTION
+@app.route("/select_cartoon", methods=["POST"])
+def select_cartoon():
+    user_id = request.form.get('user_id')
+    cartoon_name = request.form.get('cartoon_name')
+    
+    if user_id and cartoon_name:
+        print(f"\n(DEBUG) Cartoon Selection Received: User={user_id}, Cartoon={cartoon_name}\n")
+        
+        success = store_cartoon_selection(user_id, cartoon_name)
+        
+        if success:
+            return "Success"
+        else:
+            return "Database Error"
+            
+    return "Error: Missing data"
 
 
 if __name__ == "__main__":

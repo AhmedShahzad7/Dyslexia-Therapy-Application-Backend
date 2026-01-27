@@ -181,7 +181,22 @@ def store_mcq_error(user_id,answer_list,question_number):
                 
     
     
+def store_cartoon_selection(user_id, cartoon_name):
+    db = get_db()
     
+    # Reference the 'cartoon_selection' collection
+    doc_ref = db.collection('cartoon_selection').document(user_id)
+    
+    try:
+        # Save the selection 
+        doc_ref.set({
+            "cartoon": cartoon_name.lower() 
+        })
+        print(f"Cartoon '{cartoon_name}' saved for user {user_id}")
+        return True
+    except Exception as e:
+        print(f"Error saving cartoon: {e}")
+        return False
     
 
 
