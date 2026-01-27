@@ -257,6 +257,161 @@ def predict_q7():
                 else:
                     print("Correct d")
 
+#A-Level 2 Question#8
+@app.route("/predict_q8",methods=['POST'])
+def predict_q8():
+    user_id=request.form.get('user_id')
+    question_number=request.form.get('question_number')
+    expected_Letter=request.form.get('expected_Letter')
+    Box_Index=request.form.get('Box_Index')
+    file = request.files["file"]
+    
+    if user_id:
+        db = get_db()
+        doc_ref = db.collection('Assessment_Test') \
+            .document(user_id) \
+            .collection('Level_2') \
+            .document(str(question_number))
+        print("The User(id): ",user_id)
+        print("The Question Number: ",question_number)
+        #Box n
+        if Box_Index=="1":
+            img = Image.open(file.stream).convert("RGB") 
+            print("Box Index",Box_Index)
+            print("Expected Letter: ",expected_Letter)
+            model_predict_1=g_handler_letter(img)
+            # model_predict_1=""
+            # for x in pred['prediction']:
+            #     if isinstance(x, str):
+            #         model_predict_1= x
+            # print("Model Prediction: ",model_predict_1)
+            print("Model Prediction: ",model_predict_1)
+            if model_predict_1 != 'n':
+                doc_ref.set({
+                    'Question Number': question_number,
+                    'Answer': 'Incorrect',
+                    'Error': ArrayUnion(['n'])
+                    },merge=True)
+                # doc_ref.update({
+                #     'Error': ArrayUnion(['n'])
+                #     })
+                print("Error n")
+                return "incorrect"
+            print("correct")
+            return "correct"
+        #Box u
+        elif Box_Index=="2":
+            img = Image.open(file.stream).convert("RGB") 
+            print("Box Index",Box_Index)
+            print("Expected Letter: ",expected_Letter)
+            print("Box Index",Box_Index)
+            pred=letter_predict(img)
+            model_predict_2=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict_2= x
+            print("Model Prediction: ",model_predict_2)
+            if model_predict_2 not in ['u','U_caps']:
+                doc_ref.set({
+                    'Question Number': question_number,
+                    'Answer': 'Incorrect',
+                    'Error': ArrayUnion(['u'])
+                    },merge=True)
+                # doc_ref.update({
+                #     'Error': ArrayUnion(['u'])
+                #     })
+                print("Error u")
+                return "incorrect"
+            print("correct")
+            return "correct"
+        #Box s
+        elif Box_Index=="3":
+            img = Image.open(file.stream).convert("RGB") 
+            print("Box Index",Box_Index)
+            print("Expected Letter: ",expected_Letter)
+            print("Box Index",Box_Index)
+            pred=letter_predict(img)
+            model_predict_3=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict_3= x
+            print("Model Prediction: ",model_predict_3)
+            if model_predict_3 not in ['s','S_caps',5]:
+                doc_ref.set({
+                    'Question Number': question_number,
+                    'Answer': 'Incorrect',
+                    'Error': ArrayUnion(['s'])
+                    },merge=True)
+                # doc_ref.update({
+                #     'Error': ArrayUnion(['s'])
+                #     })
+                print("Error s")
+                return "incorrect"
+            print("correct")
+            return "correct"
+        #Box z
+        elif Box_Index=="4":
+            img = Image.open(file.stream).convert("RGB") 
+            print("Box Index",Box_Index)
+            print("Expected Letter: ",expected_Letter)
+            print("Box Index",Box_Index)
+            pred=letter_predict(img)
+            model_predict_4=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict_4= x
+            print("Model Prediction: ",model_predict_4)
+            if model_predict_4 not in ['z','Z_caps']:
+                doc_ref.set({
+                    'Question Number': question_number,
+                    'Answer': 'Incorrect',
+                    'Error': ArrayUnion(['z'])
+                    },merge=True)
+                # doc_ref.update({
+                #     'Error': ArrayUnion(['z'])
+                #     })
+                print("Error z")
+                return "incorrect"
+            print("correct")
+            return "correct"
+        else:
+            return "incorrect"
+        
+
+
+
+#A-Level 2 Question#10
+@app.route("/predict_q10",methods=['POST'])
+def predict_q10():
+    user_id=request.form.get('user_id')
+    question_number=request.form.get('question_number')
+    reverse_letter=request.form.get('reversed_selected')
+    if user_id:
+        print("The user(id): ",user_id)
+        print("The Question Number: ",question_number)
+        print("Reversed Letter: ",reverse_letter)
+        db = get_db()
+        doc_ref = db.collection('Assessment_Test') \
+            .document(user_id) \
+            .collection('Level_2') \
+            .document(str(question_number))
+        if reverse_letter in ['ᗺ','Ↄ']:
+            return "correct"
+        else:
+            doc_ref.set({
+                'Question Number': question_number,
+                'Answer': 'Incorrect',
+                },merge=True)
+            doc_ref.update({
+                'Error': ArrayUnion(['B','C'])
+                })
+            return "incorrect"
+
+
+
+
+
+
 
 if __name__ == "__main__":
     app.run(host='192.168.0.14', port=5000)

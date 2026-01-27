@@ -209,9 +209,9 @@ __marimo__/
 
 config/dyslexiaid-78b8d-firebase-adminsdk-fbsvc-1fd0c51287.json
 
+apis/letter_handler.py
+
 # .gitignore
 .env
 venv/
 __pycache__/
-
-apis/letter_handler.py
