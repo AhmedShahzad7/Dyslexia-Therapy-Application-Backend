@@ -1,4 +1,5 @@
-from flask import Flask, request
+import json
+from flask import Flask, request,jsonify
 from PIL import Image,ImageDraw,ImageFont
 import io
 import numpy as np
@@ -16,6 +17,9 @@ from apis.model_api import direction_predict
 from apis.model_api import predict_handwriting
 from apis.letter_handler import g_handler_letter
 from apis.firestorequery_handler import store_direction_error
+from apis.firestorequery_handler import store_mcq_error
+
+
 
 
 app = Flask(__name__)
@@ -102,6 +106,7 @@ def predict_q5():
         else:
             return "Database Error"
     return "error"
+
 
 #A-LEVEL 2 QUESTION#6
 @app.route("/predict_q6",methods=['POST'])
@@ -258,6 +263,91 @@ def predict_q7():
                     print("Correct d")
 
 
+#A-LEVEL 3 QUESTION#11 14
+@app.route("/check_answers_q11",methods=['POST'])
+def check_answers_q11():
+    user_id = request.form.get('user_id')
+    answers_str = request.form.get('answers_list')
+    question_number=request.form.get('question_number')
+
+
+    print(f"\n(DEBUG) Assessment Level 3 Question 11 RECEIVED REQUEST: {user_id} and {answers_str} and {question_number}!!\n")
+    
+    if answers_str and user_id:
+        answers_list = json.loads(answers_str)
+        store_mcq_error(user_id,answers_list,question_number)
+        
+
+    return "error"
+
+
+#A-LEVEL 3 QUESTION#15
+@app.route("/predict_handwriting_batch",methods=['POST'])
+def predict_handwriting_batch():
+    user_id = request.form.get('user_id')
+    target_word = request.form.get('target_word')       
+    question_number = request.form.get('question_number') 
+    uploaded_files = request.files.getlist("images")
+    print(f"\n(DEBUG) Batch Prediction for User: {user_id}, Word: {target_word}, Files: {len(uploaded_files)}\n")
+    if user_id and target_word and uploaded_files:
+        try:
+            db = get_db()
+            doc_ref = db.collection('Assessment_Test') \
+                        .document(user_id) \
+                        .collection('Level_3') \
+                        .document(str(question_number))
+            
+            detected_errors = []
+            for i, file in enumerate(uploaded_files):
+                if i >= len(target_word): 
+                    break
+
+                expected_char = target_word[i]
+                
+                # Convert image for model
+                img = Image.open(file.stream).convert("RGB")
+                pred_response = predict_handwriting(img) 
+                model_predict = pred_response
+                if 'prediction' in pred_response:
+                    for x in pred_response['prediction']:
+                        if isinstance(x, str):
+                            model_predict = x
+                
+                print(f"Letter {i}: Expected '{expected_char}' vs Predicted '{model_predict}'")
+
+                # --- COMPARISON LOGIC ---
+                # Check if the model's prediction matches the expected letter.
+                # We use .lower() to allow 'F' == 'f'
+                if model_predict.lower() != expected_char.lower():
+                    # Record the error
+                    error_msg =expected_char
+                    detected_errors.append(error_msg)
+
+            # 4. Update Database based on results
+            if detected_errors:
+                print(f"Errors Found: {detected_errors}")
+                
+                # Mark Question as Incorrect
+                doc_ref.set({
+                    'Question Number': int(question_number),
+                    'Answer': 'Incorrect',
+                }, merge=True)
+
+                # Add specific errors to the array
+                doc_ref.update({
+                    'Error': firestore.ArrayUnion(detected_errors)
+                })
+                
+                return "Checked with Errors", 200
+                
+
+        except Exception as e:
+            print(f"Error in batch prediction: {e}")
+            return f"Server Error: {e}", 500
+
+    return "Missing Data", 400
+
+
 if __name__ == "__main__":
-    app.run(host='192.168.0.14', port=5000)
+    app.run(host='192.168.1.9', port=5000,threaded=True)
 

@@ -22,24 +22,6 @@ def store_direction_error(user_id, direction_predicted,question_number):
         # If it is "Completed" or "Correct Match...", we return True (no error to log)
         if direction_predicted == "Completed" or "Correct Match" in direction_predicted:
             return True
-
-        # 2. Extract Arrow Name from Error String
-        # Input format: "Error: Arrow(Up) matched with Word(Down)"
-        if "Arrow(" in direction_predicted:
-            # Extract the word between "Arrow(" and ")"
-            start = direction_predicted.find("Arrow(") + 6
-            end = direction_predicted.find(")", start)
-            
-            if start > 5 and end > start:
-                extracted_direction = direction_predicted[start:end] # Becomes "Up", "Down", "Left", "Right"
-                direction_key = extracted_direction.capitalize() # Ensure format "Up"
-        
-        # 3. Map to Database Path
-        if direction_key in ["Up", "Down", "Left", "Right"]:
-             field_path = f"error.Direction.{direction_key}"
-        else:
-            # If we couldn't parse a valid direction, do nothing
-            return True
     elif (question_number == "5") and (direction_key != "Completed"):
         field_path = "error.Direction.Left"
     
@@ -112,5 +94,94 @@ def store_direction_error(user_id, direction_predicted,question_number):
         
     return True
 
+
+
+
+
+
+
+#ALEVEL 3 Q11 Q13
+def store_mcq_error(user_id,answer_list,question_number):
+    db=firestore.client()
+    doc_ref = db.collection('Assessment_Test') \
+                .document(user_id) \
+                .collection('Level_3') \
+                .document(str(question_number))
+    detected_errors = []
+    
+    #QUESTION 11
+    if question_number=="11":
+        first_answer = answer_list[0]
+        second_answer=answer_list[1]
+        print(first_answer,second_answer)
+        if first_answer!="ben":
+            detected_errors.append("ben")
+        if second_answer!="pen":
+            detected_errors.append("pen")    
+        if detected_errors:
+            print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
+            doc_ref.set({
+            'Question Number': int(question_number),
+            'Answer': 'Incorrect',
+            }, merge=True)
+            doc_ref.update({
+            'Error': firestore.ArrayUnion(detected_errors)
+            
+            })
+            #QUESTION 13
+    elif question_number=="13":
+        correct_set = {"cap", "lap", "map", "nap", "tap"}
+        user_set=set(answer_list)
+  
+        missing_words = correct_set - user_set
+        for word in missing_words:
+            detected_errors.append(word)
+
+        wrong_selections = user_set - correct_set
+        for word in wrong_selections:
+            detected_errors.append(word)
+
+        if detected_errors:
+            print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
+            
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Incorrect',
+            }, merge=True)
+
+            doc_ref.update({
+                'Error': firestore.ArrayUnion(detected_errors)
+            })
+            #QUESTION 14
+    elif question_number=="14":
+        target_word = "was"
+        count = 4
+        for word in answer_list:
+            if word != target_word:
+                if word == "saw":
+                    # "saw" is a specific reversal error common in dyslexia THIS WILL BE HANDLED LATER
+                    detected_errors.append(word)
+                else:
+                    detected_errors.append(word)
+        found_count = answer_list.count(target_word)
+        if found_count < count:
+            missing_count = count - found_count #MISSED WILL BE HANDLED LATERR
+            detected_errors.append(word)
+        if detected_errors:
+            print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
+            
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Incorrect',
+            }, merge=True)
+
+            doc_ref.update({
+                'Error': firestore.ArrayUnion(detected_errors)
+            })
+                
+    
+    
+    
+    
 
 
