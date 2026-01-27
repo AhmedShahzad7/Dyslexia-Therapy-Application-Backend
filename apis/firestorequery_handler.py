@@ -5,7 +5,7 @@ def store_direction_error(user_id, direction_predicted,question_number):
     db = get_db()
     
     # 1. Reference the user's document
-    doc_ref = db.collection('Error_Classification').document(user_id)
+    doc_ref = db.collection('Assessment_Test').document(user_id).collection('Level_1').document(str(question_number))
     
     # Capitalize to match DB format (e.g., "Up", "Down")
     direction_key = direction_predicted.capitalize() 
