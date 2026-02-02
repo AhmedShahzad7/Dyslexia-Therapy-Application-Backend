@@ -461,7 +461,7 @@ def predict_handwriting_batch():
                 
                 # Convert image for model
                 img = Image.open(file.stream).convert("RGB")
-                pred_response = predict_handwriting(img) 
+                pred_response = g_handler_letter(img) 
                 model_predict = pred_response
                 if 'prediction' in pred_response:
                     for x in pred_response['prediction']:
@@ -522,5 +522,5 @@ def select_cartoon():
 
 
 if __name__ == "__main__":
-    app.run(host='192.168.1.9', port=5000,threaded=True)
+    app.run(host='192.168.1.13', port=5000,threaded=True)
 
