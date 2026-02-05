@@ -521,6 +521,145 @@ def select_cartoon():
     return "Error: Missing data"
 
 
+#level 4 question 18 
+@app.route("/check_answers_q18", methods=['POST'])
+def check_answers_q18():
+    user_id = request.form.get('user_id')
+    question_number = request.form.get('question_number')
+    answers_list_raw = request.form.get('answers_list') 
+    
+    if not user_id or not answers_list_raw:
+        return "Missing Data", 400
+
+    try:
+        # 1. Parse the JSON string from the frontend
+        selected_words = json.loads(answers_list_raw)
+        
+        # 2. PRINT full selection to VS Code Terminal
+        print(f"\n--- Question {question_number} Selection ---")
+        print(f"User ID: {user_id}")
+        print(f"Full Selection: {selected_words}")
+        print("------------------------------------------\n")
+        
+        # 3. Filter: Identify only words that are NOT "bog"
+        detected_errors = [word for word in selected_words if word.lower() != "bog"]
+        
+        db = get_db()
+        doc_ref = db.collection('Assessment_Test') \
+                    .document(user_id) \
+                    .collection('Level_4') \
+                    .document(str(question_number))
+
+        # 4. Prepare Firebase Payload (No 'User Selection' field)
+        if detected_errors:
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Incorrect',
+                'Timestamp': firestore.SERVER_TIMESTAMP
+            }, merge=True)
+            
+            # Store ONLY the errors in the Firebase array
+            doc_ref.update({
+                'Error': firestore.ArrayUnion(detected_errors)
+            })
+            return "Errors stored to Firebase; Full list printed to terminal", 200
+        else:
+            # If everything was correct, mark it so
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Correct',
+                'Timestamp': firestore.SERVER_TIMESTAMP
+            }, merge=True)
+            return "Correct selection; Full list printed to terminal", 200
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return str(e), 500
+#level 4 Question 17 and 19
+@app.route("/predict_handwriting_sentence", methods=['POST'])
+def predict_handwriting_sentence():
+    user_id = request.form.get('user_id')
+    # For Level 4, we receive a full sentence (e.g., "The big dog")
+    target_sentence = request.form.get('target_sentence')     
+    question_number = request.form.get('question_number') 
+    uploaded_files = request.files.getlist("images")
+
+    print(f"\n(DEBUG) Sentence Prediction for User: {user_id}, Sentence: {target_sentence}, Files: {len(uploaded_files)}\n")
+
+    if user_id and target_sentence and uploaded_files:
+        try:
+            db = get_db()
+            # Updated collection path to 'Level_4' as per Question 17 requirements
+            doc_ref = db.collection('Assessment_Test') \
+                        .document(user_id) \
+                        .collection('Level_4') \
+                        .document(str(question_number))
+            
+        
+            expected_chars = [char for char in target_sentence if char.isalnum()]
+            
+            detected_errors = []
+
+            for i, file in enumerate(uploaded_files):
+                # Guard against more files than expected characters
+                if i >= len(expected_chars): 
+                    break
+
+                expected_char = expected_chars[i]
+                
+                # Process image for the AI model
+                img = Image.open(file.stream).convert("RGB")
+                pred_response = g_handler_letter(img)
+                model_predict=pred_response 
+                
+                model_predict = ""
+                # Extract the character string from the model's response dictionary
+                if isinstance(pred_response, dict) and 'prediction' in pred_response:
+                    for x in pred_response['prediction']:
+                        if isinstance(x, str):
+                            model_predict = x
+                else:
+                    model_predict = str(pred_response)
+                
+                print(f"Index {i}: Expected '{expected_char}' vs Predicted '{model_predict}'")
+
+                # --- COMPARISON LOGIC ---
+                # Match character by character (case-insensitive)
+                if model_predict.lower() != expected_char.lower():
+                    detected_errors.append(expected_char)
+
+            # --- DATABASE UPDATE ---
+            if detected_errors:
+                print(f"Errors Found in Sentence: {detected_errors}")
+                
+                # Mark as Incorrect and store specific character errors
+                doc_ref.set({
+                    'Question Number': int(question_number),
+                    'Answer': 'Incorrect',
+                }, merge=True)
+
+                doc_ref.update({
+                    'Error': firestore.ArrayUnion(list(set(detected_errors)))
+                })
+                print("UPDATED FIRESTORE")
+                return "Sentence Checked with Errors", 200
+            else:
+                # Mark as Correct if all characters matched
+                doc_ref.set({
+                    'Question Number': int(question_number),
+                    'Answer': 'Correct',
+                     }, merge=True)
+                print("UPDATED FIRESTORE")
+                return "Sentence Correct", 200
+
+        except Exception as e:
+            print("ERROR FIRESTORE")
+            print(f"Error in sentence prediction: {e}")
+            return f"Server Error: {e}", 500
+
+    return "Missing Data", 400
+
+
 if __name__ == "__main__":
     app.run(host='192.168.1.13', port=5000,threaded=True)
 
