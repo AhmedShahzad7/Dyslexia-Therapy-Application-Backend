@@ -1,14 +1,16 @@
+import os
 import json
 from flask import Flask, request,jsonify
 from PIL import Image,ImageDraw,ImageFont
 import io
+import whisperx
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.preprocessing import image
 from config.firebase import get_db
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import ArrayUnion
-
+from werkzeug.utils import secure_filename
 
 #IMPORTING FUNCTIONS FROM FOLDER
 from config.firebase import initialize_firebase
@@ -23,12 +25,53 @@ from apis.firestorequery_handler import store_cartoon_selection
 
 
 app = Flask(__name__)
+#WHISPER X
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'temp_audio') # <-- Now it's an absolute path!
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+device = "cpu" 
+compute_type = "int8" 
+print("Loading WhisperX model...")
+model = whisperx.load_model("base", device, compute_type=compute_type)
+print("Model loaded successfully!")
+
+
 
 #INITIALIZING FIREBASE
 initialize_firebase()
 
 
 #LETTER API REQUEST
+@app.route('/transcribe', methods=['POST'])
+def transcribe_audio():
+    # 2. Check if an audio file was sent in the request
+    if 'audio' not in request.files:
+        return jsonify({"error": "No audio file provided"}), 400
+        
+    file = request.files['audio']
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        # 3. Load the saved audio and transcribe it
+        audio = whisperx.load_audio(filepath)
+        result = model.transcribe(audio, batch_size=8) 
+        
+        # 4. Clean up the temporary file
+        os.remove(filepath)
+        
+        # 5. Return the transcribed text segments as JSON
+        return jsonify({"transcription": result["segments"]}), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
 
 @app.route("/predict_letter", methods=["POST"])
 def predict_letter():
@@ -661,5 +704,5 @@ def predict_handwriting_sentence():
 
 
 if __name__ == "__main__":
-    app.run(host='192.168.1.13', port=5000,threaded=True)
+    app.run(host='192.168.1.11', port=5000,threaded=True)
 
