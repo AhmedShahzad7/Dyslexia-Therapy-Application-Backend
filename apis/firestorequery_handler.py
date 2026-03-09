@@ -157,3 +157,23 @@ def store_cartoon_selection(user_id, cartoon_name):
     
 
 
+#ALEVEL 3 Q12
+def store_voice_error(user_id,targetname,error,question_number,detected_errors):
+        print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
+        db = get_db()
+        doc_ref = db.collection('Assessment_Test') \
+                    .document(user_id) \
+                    .collection('Level_3') \
+                    .document(str(question_number))
+        
+        # 1. Ensure the document exists and is marked as Incorrect
+        doc_ref.set({
+            'Question Number': int(question_number),
+            'Answer': 'Incorrect',
+        }, merge=True)
+
+        # 2. Push the specific error into the Error array
+        doc_ref.update({
+            'Error': firestore.ArrayUnion(detected_errors)
+        })
+

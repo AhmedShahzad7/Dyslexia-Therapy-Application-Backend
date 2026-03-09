@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import jellyfish
 from flask import Flask, request,jsonify
 from PIL import Image,ImageDraw,ImageFont
 import io
@@ -21,6 +23,7 @@ from apis.letter_handler import g_handler_letter
 from apis.firestorequery_handler import store_direction_error
 from apis.firestorequery_handler import store_mcq_error
 from apis.firestorequery_handler import store_cartoon_selection
+from apis.firestorequery_handler import store_voice_error
 
 
 
@@ -69,6 +72,65 @@ def transcribe_audio():
 
 
 
+@app.route('/transcribe_and_score', methods=['POST'])
+def transcribe_and_score():
+    if 'audio' not in request.files or 'target_word' not in request.form:
+        return jsonify({"error": "Missing audio file or target_word"}), 400
+    user_id = request.form.get('user_id')
+    target_word = request.form['target_word'].lower().strip()
+    file = request.files['audio']
+    question_number = request.form.get('question_number')
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        # 1. Transcribe the audio
+        audio = whisperx.load_audio(filepath)
+        result = model.transcribe(audio, batch_size=8) 
+        os.remove(filepath)
+        
+        # 2. Extract and clean the text (remove punctuation and make lowercase)
+        raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
+        transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
+        
+        # If Whisper picked up multiple words (e.g., "the board"), grab the last one
+        words_spoken = transcribed_clean.split()
+        word_to_compare = words_spoken[-1] if words_spoken else ""
+
+        # 3. Calculate Phonetic Similarity
+        # Jaro-Winkler prioritizes words that start with the same sounds/letters
+        similarity_score = jellyfish.jaro_winkler_similarity(target_word, word_to_compare)
+        
+        # 4. Set your threshold! 0.80 is usually the sweet spot for minor AI misinterpretations.
+        is_correct = bool(similarity_score >= 0.65)
+        
+        # Optional: Generate the raw phonetic codes just so you can see them in your logs!
+        target_metaphone = jellyfish.metaphone(target_word)
+        transcribed_metaphone = jellyfish.metaphone(word_to_compare)
+        
+        print(f"Target: {target_word} ({target_metaphone}) | AI Heard: {word_to_compare} ({transcribed_metaphone}) | Score: {similarity_score}")
+        detected_errors=[]
+        if is_correct:
+            print(f"(DEBUG) User {user_id} correctly pronounced {target_word}.")
+        elif user_id:
+            detected_errors.append(target_word)
+            store_voice_error(user_id,target_word,word_to_compare,question_number, detected_errors)
+      
+            
+                                  
+        
+        
+        
+        return jsonify({
+            "target_word": target_word,
+            "transcribed_word": word_to_compare,
+            "similarity_score": similarity_score,
+            "is_correct": is_correct
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 
