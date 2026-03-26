@@ -72,7 +72,7 @@ def transcribe_audio():
         return jsonify({"error": str(e)}), 500
 
 
-
+#A-Level Question 12
 @app.route('/transcribe_and_score', methods=['POST'])
 def transcribe_and_score():
     if 'audio' not in request.files or 'target_word' not in request.form:
@@ -447,7 +447,7 @@ def predict_q8():
                 if isinstance(x, str):
                     model_predict_3= x
             print("Model Prediction: ",model_predict_3)
-            if model_predict_3 not in ['s','S_caps',5]:
+            if model_predict_3 not in ['s','S_caps','5']:
                 doc_ref.set({
                     'Question Number': question_number,
                     'Answer': 'Incorrect',
@@ -472,7 +472,7 @@ def predict_q8():
                 if isinstance(x, str):
                     model_predict_4= x
             print("Model Prediction: ",model_predict_4)
-            if model_predict_4 not in ['z','Z_caps']:
+            if model_predict_4 not in ['z','Z_caps','2']:
                 doc_ref.set({
                     'Question Number': question_number,
                     'Answer': 'Incorrect',
@@ -904,7 +904,8 @@ def predict_handwriting_sentence():
                         if ((expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)=='0')) or (expected_char.lower()=='s' and (str(model_predict) =='S_caps' or str(model_predict)=='5')) or (expected_char.lower()=='w' and str(model_predict) =='W_caps') or
                             (expected_char=='T' and str(model_predict)=='T_caps') or 
                             (expected_char=='b' and str(model_predict)=='B_caps') or 
-                            (expected_char=='H' and str(model_predict)=='H_caps')):
+                            (expected_char=='H' and str(model_predict)=='H_caps') or
+                            (expected_char=='g' and str(model_predict)=='9')):
                             continue
                         # Record the error
                         else:
@@ -943,7 +944,7 @@ def predict_handwriting_sentence():
     return "Missing Data", 400
 
 #question19 
-@app.route('/transcribe_and_score', methods=['POST'])
+@app.route('/transcribe_and_score1', methods=['POST'])
 def transcribe_and_score1():
     if 'audio' not in request.files or 'target_word' not in request.form:
         return jsonify({"error": "Missing audio file or target_word"}), 400
@@ -1002,7 +1003,7 @@ def transcribe_and_score1():
             try:
                 db = get_db()
                 # Determine level based on question number
-                level = "Level_4" if int(question_number) >= 16 else "Level_3"
+                level ="Level_4"
                 doc_ref = db.collection('Assessment_Test') \
                             .document(user_id) \
                             .collection(level) \
@@ -1087,8 +1088,63 @@ def get_common_errors(user_id):
         return jsonify({"error": str(e)}), 500
     
 
-    
-    
+
+#Home Sceen Popup
+@app.route('/api/scores/<user_id>', methods=['GET'])
+def get_user_scores(user_id):
+    try:
+        db = get_db()
+        
+        # --- CHECK IF ASSESSMENT IS COMPLETED ---
+        user_profile_ref = db.collection('users').document(user_id)
+        user_profile_doc = user_profile_ref.get()
+        
+        if not user_profile_doc.exists:
+            return jsonify({"status": "error", "message": "User profile not found."}), 404
+            
+        user_data = user_profile_doc.to_dict()
+        has_completed = user_data.get('hasCompletedAssessment', True)
+        
+        # If  haven't finished, return an empty list 
+        if not has_completed:
+            return jsonify({"status": "success", "data": []}), 200
+
+        # ---  CALCULATE SCORES ---
+        assessment_ref = db.collection('Assessment_Test').document(user_id)
+        
+        scores_summary = []
+
+        
+        level_totals = {
+            'Level_1': 5,
+            'Level_2': 5,
+            'Level_3': 5,
+            'Level_4': 4
+        }
+
+        # Loop through every expected level
+        for level_name, total_questions in level_totals.items():
+            
+       
+            collection_ref = assessment_ref.collection(level_name)
+            
+            # Count the number of error documents
+            
+            errors_made = len(list(collection_ref.stream()))
+            
+            # Calculate correct answers
+            correct_answers = max(0, total_questions - errors_made)
+            
+            scores_summary.append({
+                "level": level_name,
+                "score": f"{correct_answers}/{total_questions}"
+            })
+
+        return jsonify({"status": "success", "data": scores_summary}), 200
+
+    except Exception as e:
+        print(f"Flask API Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001,threaded=True)
 
