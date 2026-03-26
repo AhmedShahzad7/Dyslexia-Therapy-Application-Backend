@@ -13,6 +13,7 @@ from config.firebase import get_db
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import ArrayUnion
 from werkzeug.utils import secure_filename
+import traceback
 
 #IMPORTING FUNCTIONS FROM FOLDER
 from config.firebase import initialize_firebase
@@ -23,7 +24,7 @@ from apis.letter_handler import g_handler_letter
 from apis.firestorequery_handler import store_direction_error
 from apis.firestorequery_handler import store_mcq_error
 from apis.firestorequery_handler import store_cartoon_selection
-from apis.firestorequery_handler import store_voice_error
+from apis.firestorequery_handler import store_voice_error,store_voice_error1
 
 
 
@@ -486,7 +487,78 @@ def predict_q8():
             return "correct"
         else:
             return "incorrect"
+  #A-Level 2 Question#9
+@app.route('/transcribe_phoneme', methods=['POST'])
+def transcribe_phoneme():
+    if 'audio' not in request.files or 'target_sound' not in request.form:
+        return jsonify({"error": "Missing audio file or target_sound"}), 400
         
+    target_word = request.form['target_sound'].lower().strip()
+    user_id = request.form.get('user_id')
+    question_number = request.form.get('question_number', '9')
+    
+    file = request.files['audio']
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        audio = whisperx.load_audio(filepath)
+        
+
+        result = model.transcribe(audio, batch_size=8, language="en") 
+        os.remove(filepath)
+        
+        raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
+        transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
+        
+        # Get the word the AI heard
+        words_spoken = transcribed_clean.split()
+        heard_word = words_spoken[0] if words_spoken else ""
+        
+   
+        similarity_score = jellyfish.jaro_winkler_similarity(target_word, heard_word)
+        
+    
+        is_correct = bool(similarity_score >= 0.65)
+    
+        target_metaphone = jellyfish.metaphone(target_word)
+        transcribed_metaphone = jellyfish.metaphone(heard_word)
+        
+        print(f"Target Word: '{target_word}' ({target_metaphone}) | AI Heard: '{heard_word}' ({transcribed_metaphone}) | Score: {similarity_score}")
+
+   
+        if not is_correct and user_id:
+            db = get_db()
+            doc_ref = db.collection('Assessment_Test') \
+                        .document(user_id) \
+                        .collection('Level_2') \
+                        .document(str(question_number))
+             
+         
+
+            error_log = [target_word]           
+            
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Incorrect',
+            }, merge=True)
+
+    
+            doc_ref.update({
+                'Error': firestore.ArrayUnion(error_log)
+            })
+
+        return jsonify({
+            "target_sound": target_word,
+            "heard_sound": heard_word,
+            "similarity_score": similarity_score,
+            "is_correct": is_correct
+        }), 200
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500    
 
 
 
@@ -566,7 +638,11 @@ def predict_handwriting_batch():
                 
                 # Convert image for model
                 img = Image.open(file.stream).convert("RGB")
-                pred_response = g_handler_letter(img) 
+                if expected_char.lower() in ['a', 'i', 'g', 'r']:
+                    pred_response = g_handler_letter(img)
+                else:
+                    pred_response = letter_predict(img)
+                    
                 model_predict = pred_response
                 if 'prediction' in pred_response:
                     for x in pred_response['prediction']:
@@ -578,10 +654,14 @@ def predict_handwriting_batch():
                 # --- COMPARISON LOGIC ---
                 # Check if the model's prediction matches the expected letter.
                 # We use .lower() to allow 'F' == 'f'
+
                 if model_predict.lower() != expected_char.lower():
+                    if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0)):
+                        continue
                     # Record the error
-                    error_msg =expected_char
-                    detected_errors.append(error_msg)
+                    else:
+                        error_msg =expected_char
+                        detected_errors.append(error_msg)
 
             # 4. Update Database based on results
             if detected_errors:
@@ -624,6 +704,92 @@ def select_cartoon():
             return "Database Error"
             
     return "Error: Missing data"
+
+
+@app.route('/question16', methods=['POST'])
+def question16():
+    if 'audio' not in request.files or 'target_sound' not in request.form:
+        return jsonify({"error": "Missing audio file or target_sound"}), 400
+        
+    # 'target_sound' is now a sentence like "The cat is big"
+    target_sentence = request.form['target_sound'].lower().strip()
+    target_words = re.sub(r'[^\w\s]', '', target_sentence).split()
+    
+    user_id = request.form.get('user_id')
+    question_number = request.form.get('question_number', '16')
+    
+    file = request.files['audio']
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        
+        # 1. Transcribe the full sentence
+        audio = whisperx.load_audio(filepath)
+        result = model.transcribe(audio, batch_size=8, language="en") 
+        os.remove(filepath)
+        
+        raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
+        print(f"Target: {target_sentence}")
+        print(f"AI Heard: {raw_text}")
+        heard_text_clean = re.sub(r'[^\w\s]', '', raw_text)
+        heard_words = heard_text_clean.split()
+        
+        # 2. Identify Incorrect Words
+        # We compare word-by-word. 
+        # Note: This assumes the user says words in the correct order.
+        detected_errors = []
+        
+        # We iterate through the target words
+        for i, target_w in enumerate(target_words):
+            # Check if the AI actually heard a word at this position
+            if i < len(heard_words):
+                heard_w = heard_words[i]
+                similarity = jellyfish.jaro_winkler_similarity(target_w, heard_w)
+                print(f"Comparing [{target_w}] vs [{heard_w}] -> Similarity: {similarity:.2f}")
+                
+                # If similarity is too low, it's a pronunciation error
+                if similarity < 0.65: # Slightly higher threshold for sentences
+                    detected_errors.append(target_w)
+            else:
+                # User skipped the word or AI didn't catch it
+                detected_errors.append(target_w)
+
+        # 3. Final Result Logic
+        is_fully_correct = len(detected_errors) == 0
+
+
+        # 4. Database Update
+        if not is_fully_correct and user_id:
+            db = get_db()
+            doc_ref = db.collection('Assessment_Test') \
+                        .document(user_id) \
+                        .collection('Level_4') \
+                        .document(str(question_number))
+            
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Answer': 'Incorrect',
+                'Full Sentence': target_sentence
+            }, merge=True)
+
+            # Store only the specific words that were wrong
+            doc_ref.update({
+                'Error': firestore.ArrayUnion(detected_errors)
+            })
+
+        return jsonify({
+            "target_sentence": target_sentence,
+            "transcribed_text": raw_text,
+            "wrong_words": detected_errors,
+            "is_correct": is_fully_correct
+        }), 200
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    
 
 
 #level 4 question 18 
@@ -714,7 +880,10 @@ def predict_handwriting_sentence():
                 
                 # Process image for the AI model
                 img = Image.open(file.stream).convert("RGB")
-                pred_response = g_handler_letter(img)
+                if expected_char.lower() in ['a', 'i', 'g', 'r','w']:
+                    pred_response = g_handler_letter(img)
+                else:
+                    pred_response = letter_predict(img)
                 model_predict=pred_response 
                 
                 model_predict = ""
@@ -731,7 +900,16 @@ def predict_handwriting_sentence():
                 # --- COMPARISON LOGIC ---
                 # Match character by character (case-insensitive)
                 if model_predict.lower() != expected_char.lower():
-                    detected_errors.append(expected_char)
+                    if model_predict.lower() != expected_char.lower():
+                        if ((expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)=='0')) or (expected_char.lower()=='s' and (str(model_predict) =='S_caps' or str(model_predict)=='5')) or (expected_char.lower()=='w' and str(model_predict) =='W_caps') or
+                            (expected_char=='T' and str(model_predict)=='T_caps') or 
+                            (expected_char=='b' and str(model_predict)=='B_caps') or 
+                            (expected_char=='H' and str(model_predict)=='H_caps')):
+                            continue
+                        # Record the error
+                        else:
+                            error_msg =expected_char
+                            detected_errors.append(error_msg)
 
             # --- DATABASE UPDATE ---
             if detected_errors:
@@ -764,7 +942,153 @@ def predict_handwriting_sentence():
 
     return "Missing Data", 400
 
+#question19 
+@app.route('/transcribe_and_score', methods=['POST'])
+def transcribe_and_score1():
+    if 'audio' not in request.files or 'target_word' not in request.form:
+        return jsonify({"error": "Missing audio file or target_word"}), 400
+    
+    user_id = request.form.get('user_id')
+    # target_word is the full sentence (e.g., "The cat is big")
+    target_sentence = request.form['target_word'].lower().strip()
+    # Clean target sentence for word splitting
+    target_words = re.sub(r'[^\w\s]', '', target_sentence).split()
+    
+    question_number = request.form.get('question_number', '19')
+    file = request.files['audio']
+    
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        # 1. Transcribe the full sentence
+        audio = whisperx.load_audio(filepath)
+        # Using batch_size=8 for faster sentence processing
+        result = model.transcribe(audio, batch_size=8, language="en") 
+        os.remove(filepath)
+        
+        # 2. Extract and clean the AI's transcription
+        raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
+        print(f"--- Q{question_number} Assessment ---")
+        print(f"Target: {target_sentence}")
+        print(f"AI Heard: {raw_text}")
+        
+        heard_text_clean = re.sub(r'[^\w\s]', '', raw_text)
+        heard_words = heard_text_clean.split()
+        
+        # 3. WORD-BY-WORD POSITIONAL COMPARISON
+        detected_errors = []
+        
+        # Iterate through target words to maintain strict order
+        for i, target_w in enumerate(target_words):
+            if i < len(heard_words):
+                heard_w = heard_words[i]
+                similarity = jellyfish.jaro_winkler_similarity(target_w, heard_w)
+                print(f"Pos {i}: [{target_w}] vs [{heard_w}] -> Sim: {similarity:.2f}")
+                
+                # If similarity is too low (< 0.65), it's a specific word error
+                if similarity < 0.65:
+                    detected_errors.append(target_w)
+            else:
+                # User stopped talking or AI missed the word at the end
+                detected_errors.append(target_w)
 
+        # 4. Final Result Logic
+        is_fully_correct = len(detected_errors) == 0
+
+        # 5. Database Update (Firestore)
+        if user_id:
+            try:
+                db = get_db()
+                # Determine level based on question number
+                level = "Level_4" if int(question_number) >= 16 else "Level_3"
+                doc_ref = db.collection('Assessment_Test') \
+                            .document(user_id) \
+                            .collection(level) \
+                            .document(str(question_number))
+                
+                if not is_fully_correct:
+                    # Store as Incorrect with specific word errors
+                    doc_ref.set({
+                        'Question Number': int(question_number),
+                        'Answer': 'Incorrect',
+                        'Full Sentence': target_sentence,
+                        'Transcribed': raw_text
+                    }, merge=True)
+                    
+                    # Store only the specific words that were wrong
+                    doc_ref.update({
+                        'Error': firestore.ArrayUnion(detected_errors)
+                    })
+                    print(f"(DEBUG) Incorrect stored for Q{question_number}. Errors: {detected_errors}")
+                else:
+                    # Store as Correct
+                    doc_ref.set({
+                        'Question Number': int(question_number),
+                        'Answer': 'Correct',
+                        'Full Sentence': target_sentence
+                    }, merge=True)
+                    print(f"(DEBUG) Correct stored for Q{question_number}")
+
+            except Exception as db_error:
+                print(f"Firestore Update Failed: {db_error}")
+        
+        return jsonify({
+            "target_sentence": target_sentence,
+            "transcribed_text": raw_text,
+            "wrong_words": detected_errors,
+            "is_correct": is_fully_correct
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"General Audio Route Error: {e}")
+        return jsonify({"error": str(e)}), 500
+    
+
+#common error 
+
+@app.route("/get_common_errors/<user_id>", methods=['GET'])
+def get_common_errors(user_id):
+    try:
+        db = get_db()
+        all_errors = []
+        # List of all levels you are currently tracking in your backend
+        levels = ["Level_1", "Level_2", "Level_3", "Level_4"]
+
+        for level in levels:
+            # Query the sub-collection for documents where the student made a mistake
+            docs = db.collection('Assessment_Test').document(user_id).collection(level).where("Answer", "==", "Incorrect").stream()
+            
+            for doc in docs:
+                data = doc.to_dict()
+                # Get the 'Error' field (which you store as ArrayUnion in other routes)
+                errors = data.get('Error', [])
+                
+                # Format the error detail: Join list items or use string directly
+                if isinstance(errors, list):
+                    error_detail = ", ".join(map(str, errors))
+                else:
+                    error_detail = str(errors)
+                
+                # Add to the list we send to the mobile app
+                all_errors.append({
+                    "level": f"{level}: Question {data.get('Question Number', 'N/A')}",
+                    "detail": error_detail if error_detail else "General Error"
+                })
+
+        # If no errors found, return an empty list instead of a 404
+        return jsonify(all_errors), 200
+
+    except Exception as e:
+        print(f"Error fetching common errors for {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+    
+
+    
+    
 if __name__ == "__main__":
-    app.run(host='192.168.1.11', port=5000,threaded=True)
+    app.run(host='0.0.0.0', port=5001,threaded=True)
 

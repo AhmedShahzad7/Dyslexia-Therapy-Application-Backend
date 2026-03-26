@@ -145,6 +145,10 @@ def store_cartoon_selection(user_id, cartoon_name):
     doc_ref = db.collection('cartoon_selection').document(user_id)
     
     try:
+        user_ref = db.collection('users').document(user_id)
+        user_ref.set({
+            "hasCompletedAssessment": True,
+        }, merge=True)
         # Save the selection 
         doc_ref.set({
             "cartoon": cartoon_name.lower() 
@@ -177,3 +181,27 @@ def store_voice_error(user_id,targetname,error,question_number,detected_errors):
             'Error': firestore.ArrayUnion(detected_errors)
         })
 
+
+#question19
+def store_voice_error1(user_id, targetname, error, question_number, detected_errors):
+    try:
+        db = get_db()
+        level = "Level_4" if int(question_number) >= 17 else "Level_3"
+        
+        doc_ref = db.collection('Assessment_Test').document(user_id).collection(level).document(str(question_number))
+        
+        # 1. Mark the question status
+        doc_ref.set({
+            'Question Number': int(question_number),
+            'Answer': 'Incorrect',
+        }, merge=True)
+
+        doc_ref.update({
+            'Error': firestore.ArrayUnion(detected_errors)
+        })
+        
+        print(f"(SUCCESS) Firestore updated for User {user_id} with errors: {detected_errors}")
+        return True
+    except Exception as e:
+        print(f"Firestore update failed: {e}")
+        return False

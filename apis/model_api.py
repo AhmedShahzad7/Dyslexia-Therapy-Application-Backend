@@ -46,6 +46,18 @@ def letter_predict(img):
     
     #HIDE GEMINI CODE ##
     # print(g_handler_letter(img)) 
+
+    predictions_indices = model.predict(img_array)[0]
+    top_5_indices = np.argsort(predictions_indices)[-5:][::-1]
+
+    top_5_results = []
+    for i in top_5_indices:
+        top_5_results.append({
+            "label": CLASS_NAMES[i],
+            "confidence": float(predictions_indices[i])
+        })
+    
+    print(top_5_results)
     
     return ({"prediction": {predicted_class,confidence}})
 
