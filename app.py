@@ -25,7 +25,7 @@ from apis.firestorequery_handler import store_direction_error
 from apis.firestorequery_handler import store_mcq_error
 from apis.firestorequery_handler import store_cartoon_selection
 from apis.firestorequery_handler import store_voice_error,store_voice_error1
-
+import requests
 
 
 app = Flask(__name__)
@@ -146,20 +146,20 @@ def predict_letter():
 
 
 #DIRECTOIN API REQUEST ALEVEL 1 QUESTION 1
-@app.route("/predict_direction", methods=["POST"])
-def predict_direction():
-    user_id = request.form.get('user_id')
-    file = request.files["file"]
+# @app.route("/predict_direction", methods=["POST"])
+# def predict_direction():
+#     user_id = request.form.get('user_id')
+#     file = request.files["file"]
 
-    if user_id:
-        print(f"\n(DEBUG) Assessment Level 1 Question 1 RECEIVED REQUEST: {user_id}!!\n")
+#     if user_id:
+#         print(f"\n(DEBUG) Assessment Level 1 Question 1 RECEIVED REQUEST: {user_id}!!\n")
         
-        img = Image.open(file.stream).convert("RGB")  
-        direction=direction_predict(img)
-        print(direction)
-        update_success = store_direction_error(user_id, direction,"1")
-        return direction
-    return "error"
+#         img = Image.open(file.stream).convert("RGB")  
+#         direction=direction_predict(img)
+#         print(direction)
+#         update_success = store_direction_error(user_id, direction,"1")
+#         return direction
+#     return "error"
 
 #DIRECTION MCQ ALEVEL 1 QUESTION 2
 @app.route("/predict_direction_mcq", methods=["POST"])
@@ -1145,6 +1145,153 @@ def get_user_scores(user_id):
     except Exception as e:
         print(f"Flask API Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+#===========================LEVEL HANDLING=================================
+#=========================
+#=========================#
+from typecast import Typecast
+from typecast.models import TTSRequest
+
+
+# 1. Initialize the Typecast client
+# REPLACE THIS WITH YOUR REAL API KEY FROM THE DASHBOARD
+typecast_client = Typecast(api_key="ENTER API KEY HERE") 
+CHARACTER_ID = "tc_645b39b760386589fd851133" # Your Doraemon-like character
+
+# 2. Ensure the audio directory exists on server startup
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'audio')
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+def generate_typecast_audio(text, filename):
+    """
+    Calls the Typecast Python SDK, saves the .wav file locally, 
+    and returns the local URL for the Kotlin app to stream.
+    """
+    try:
+        # Request the audio from Typecast
+        response = typecast_client.text_to_speech(TTSRequest(
+            text=text,
+            model="ssfm-v30", # Ensure this model matches your Typecast plan
+            voice_id=CHARACTER_ID
+        ))
+
+        # Save the audio file to our static/audio folder
+        filepath = os.path.join(AUDIO_DIR, filename)
+        with open(filepath, 'wb') as f:
+            f.write(response.audio_data)
+
+        # Build the URL that Android will use to download this file
+        # request.host automatically handles your IP and Port (e.g. 192.168.1.9:5001)
+        audio_url = f"http://{request.host}/static/audio/{filename}"
+        print(f"(DEBUG) Audio generated successfully: {audio_url}")
+        
+        return audio_url
+
+    except Exception as e:
+        print(f"(ERROR) Typecast SDK: {str(e)}")
+        return None
+
+# --- UPDATED GET ROUTE ---
+@app.route('/get_personalized_question', methods=['GET'])
+def get_personalized_question():
+    user_id = request.args.get('user_id')
+    # Grab the question number from the URL, default to '1'
+    q_num_param = request.args.get('question_number', '1') 
+    
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    try:
+        db = get_db()
+        # Dynamically pulls from Level_1 -> Document (q_num_param)
+        doc_ref = db.collection('Assessment_Test') \
+                    .document(user_id) \
+                    .collection('Level_1') \
+                    .document(str(q_num_param))
+        
+        doc = doc_ref.get()
+        data = doc.to_dict() if doc.exists else None
+
+        if data and "Error" in data and isinstance(data["Error"], list) and len(data["Error"]) > 0:
+            target_word = data["Error"][0]
+        else:
+            target_word = "Up" # Default target
+
+        question_number = data.get("Question number", int(q_num_param)) if data else int(q_num_param)
+        instruction_text = f"Draw the arrow {target_word}"
+
+        # Create a unique filename: e.g., user123_q1.wav
+        audio_filename = f"{user_id}_q{question_number}.wav"
+        audio_url = generate_typecast_audio(instruction_text, audio_filename)
+
+        response = {
+            "question_number": question_number,
+            "target_word": target_word,
+            "instruction_text": instruction_text, 
+            "audio_url": audio_url 
+        }
+        
+        return jsonify(response), 200
+
+    except Exception as e:
+        print(f"(ERROR) /get_personalized_question: {str(e)}")
+        return jsonify({"error": "Failed to fetch question data"}), 500
+
+
+@app.route('/predict_direction', methods=['POST'])
+def predict_direction():
+    # 1. Validate incoming request
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['file']
+    user_id = request.form.get('user_id')
+    
+    # ---------------------------------------------------------
+    # THE FIX: Add defaults for older hardcoded Kotlin files!
+    # If a file doesn't send these, assume it's the old Question 1 ("Up")
+    # ---------------------------------------------------------
+    target_word = request.form.get('target_word', 'Up')
+    question_number = request.form.get('question_number', '1') 
+
+    # We removed 'not target_word' from the error check because it will always 
+    # have a value now (either the one sent by Kotlin, or the default 'Up').
+    if not user_id:
+        return jsonify({"error": "Missing user_id in form data"}), 400
+
+    print(f"\n(DEBUG) Assessment Level 1 Question {question_number} RECEIVED REQUEST: {user_id}!!")
+
+    try:
+        # Process image and run TensorFlow model
+        img = Image.open(file.stream).convert("RGB")  
+        model_prediction = direction_predict(img)
+        
+        # Clean strings and evaluate
+        is_correct = (model_prediction.strip().lower() == target_word.strip().lower())
+        
+        print(f"(DEBUG) Expected: {target_word} | Predicted: {model_prediction} | Correct: {is_correct}")
+
+        # Update Firebase based on dynamic question number
+        if not is_correct:
+            store_direction_error(user_id, target_word, str(question_number))
+        else:
+            pass 
+
+        # IMPORTANT: The old Kotlin file expects a plain string returned (e.g., "Up"), 
+        # but our new system returns JSON. If your old Kotlin file crashes when trying 
+        # to read the response, you'll need to handle the JSON on the old frontend!
+        return jsonify({
+            "status": "success", 
+            "correct": is_correct, 
+            "detected": model_prediction,
+            "target": target_word
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /predict_direction failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error during prediction"}), 500
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001,threaded=True)
 

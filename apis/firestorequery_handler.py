@@ -10,8 +10,14 @@ def store_direction_error(user_id, direction_predicted, question_number):
     error_key = None
     q_str = str(question_number) 
     
-    if q_str == "1" and direction_predicted != "Up":
-        error_key = "Up"
+    # --- UPDATED DYNAMIC LOGIC FOR QUESTION 1 ---
+    if q_str == "1":
+        # In app.py, we evaluate correct/incorrect before calling this function.
+        # We pass the 'target_word' directly into the 'direction_predicted' parameter.
+        # So we just store whatever word they failed!
+        error_key = direction_predicted.capitalize()
+
+    # --- OLD STATIC LOGIC FOR OTHER QUESTIONS ---
     elif q_str == "2" and direction_predicted != "Left":
         error_key = "Left"
     elif q_str == "3" and direction_predicted != "Down":
@@ -19,19 +25,15 @@ def store_direction_error(user_id, direction_predicted, question_number):
     elif q_str == "5" and direction_predicted != "Completed":
         error_key = "Left"
         
-
     elif q_str == "4":
         if "Completed" in direction_predicted or "Correct Match" in direction_predicted:
-            return True # 
+            return True 
             
-        
         if "Arrow(" in direction_predicted:
             start = direction_predicted.find("Arrow(") + 6
             end = direction_predicted.find(")", start)
             if start > 5 and end > start:
                 error_key = direction_predicted[start:end].capitalize()
-        
-  
         elif direction_predicted.capitalize() in ["Up", "Down", "Left", "Right"]:
             error_key = direction_predicted.capitalize()
 
@@ -42,7 +44,9 @@ def store_direction_error(user_id, direction_predicted, question_number):
                 .document(user_id) \
                 .collection('Level_1') \
                 .document(q_str)
+                
     detected_errors.append(error_key)
+    
     payload = {
         'Answer': 'Incorrect',
         "Error": detected_errors,
@@ -50,11 +54,9 @@ def store_direction_error(user_id, direction_predicted, question_number):
     }
 
     doc_ref.set(payload, merge=True)
-    print(f"Firestore updated for User {user_id}: error.Direction.{error_key} = True")
+    print(f"Firestore updated for User {user_id}: error.Direction.{error_key} = True in Document {q_str}")
     
     return True
-
-
 
 
 #ALEVEL 3 Q11 Q13
@@ -205,3 +207,7 @@ def store_voice_error1(user_id, targetname, error, question_number, detected_err
     except Exception as e:
         print(f"Firestore update failed: {e}")
         return False
+
+
+#=========================================Levels================================
+
