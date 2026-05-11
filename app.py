@@ -2281,6 +2281,465 @@ def predict_therapy_level2():
 
 
 
+#----LEVEL 3-----------------------
+
+_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'DyslexiaDataSet.csv')
+def _load_csv_words():
+    """
+    Loads DyslexiaDataSet.csv and returns a cleaned list of unique lowercase
+    alpha-only words (length 2–8).  Called once at module load.
+    """
+    try:
+        df = pd.read_csv(_CSV_PATH, encoding='latin-1')
+        col = df.columns[0]          # the only column is named 'apple'
+        raw = df[col].tolist()
+        seen = set()
+        cleaned = []
+        for w in raw:
+            if not isinstance(w, str):
+                continue
+            w = w.strip().lower()
+            # keep only pure alpha words of reasonable length
+            if w.isalpha() and 2 <= len(w) <= 8 and w not in seen:
+                seen.add(w)
+                cleaned.append(w)
+        print(f"(CSV) Loaded {len(cleaned)} unique words from DyslexiaDataSet.csv")
+        return cleaned
+    except Exception as e:
+        print(f"(CSV ERROR) Could not load DyslexiaDataSet.csv: {e}")
+        return []
+ 
+CSV_WORDS = _load_csv_words()
+ 
+ 
+# =============================================================================
+# CORE HELPER: find_similar_words_from_csv
+#
+# Given an error_word (what the child got wrong in the assessment), return
+# `count` real words from the CSV that are therapeutically related:
+#
+#   Priority 1 — same rhyme ending (last 2 chars) AND same word length
+#                → closest phonetic neighbours
+#   Priority 2 — same rhyme ending (any length)
+#                → still rhymes, slightly looser
+#   Priority 3 — same first letter AND same word length
+#                → similar shape / onset confusion
+#   Priority 4 — same word length only
+#                → at least structurally similar
+#   Priority 5 — any short word from the CSV (last resort)
+#
+# The error_word itself is always INCLUDED in the result (child must practice
+# the exact word they struggled with), then padded with related words.
+# Duplicates are removed before returning.
+# =============================================================================
+def find_similar_words_from_csv(error_word, count=4, required_length=None):
+    """
+    Returns a deduplicated list of `count` CSV words most similar to error_word.
+    The error_word is always element [0] so it is always practised first.
+    """
+    error_word = str(error_word).strip().lower()
+ 
+    if not CSV_WORDS:
+        # absolute fallback if CSV failed to load
+        return [error_word] * count
+ 
+    # If a specific length is required (Q15 handwriting), use it; otherwise
+    # use the error word's own length as the preferred length.
+    target_len = required_length if required_length else len(error_word)
+    rhyme_key  = error_word[-2:] if len(error_word) >= 2 else error_word[-1:]
+ 
+    # Collect candidates by priority bucket
+    p1, p2, p3, p4 = [], [], [], []
+    for w in CSV_WORDS:
+        if w == error_word:
+            continue  # we add the error_word separately below
+        ends_same  = w.endswith(rhyme_key)
+        len_same   = len(w) == target_len
+        start_same = w[0] == error_word[0]
+ 
+        if ends_same and len_same:
+            p1.append(w)
+        elif ends_same:
+            p2.append(w)
+        elif start_same and len_same:
+            p3.append(w)
+        elif len_same:
+            p4.append(w)
+ 
+    # Shuffle each bucket so we don't always get the same subset
+    random.shuffle(p1)
+    random.shuffle(p2)
+    random.shuffle(p3)
+    random.shuffle(p4)
+ 
+    # Build result: error_word first, then fill from priority buckets
+    result = [error_word]
+    for pool in [p1, p2, p3, p4, CSV_WORDS]:
+        for w in pool:
+            if w not in result:
+                result.append(w)
+            if len(result) >= count:
+                break
+        if len(result) >= count:
+            break
+ 
+    return result[:count]
+ 
+ 
+# =============================================================================
+# HELPER: build_distractor_options_for_q11
+#
+# For Q11 (MCQ "circle the matching word"), each target word needs 2
+# plausible distractors.  Distractors are chosen from the CSV using the
+# typical dyslexia letter-reversal confusions (b↔d, p↔q, n↔u, was↔saw).
+# If no confusion variant exists in the CSV, we fall back to same-rhyme words.
+# =============================================================================
+_CONFUSION_MAP = {
+    'b': 'd', 'd': 'b', 'p': 'q', 'q': 'p',
+    'n': 'u', 'u': 'n', 'm': 'w', 'w': 'm',
+}
+ 
+def build_distractor_options_for_q11(target_word):
+    """
+    Returns a 3-element list: [target_word, distractor1, distractor2]
+    All distractors come from the CSV or are plausible reversals.
+    """
+    distractors = []
+ 
+    # 1. Try letter-reversal distractors that exist in the CSV
+    for i, ch in enumerate(target_word):
+        if ch in _CONFUSION_MAP:
+            variant = target_word[:i] + _CONFUSION_MAP[ch] + target_word[i+1:]
+            if variant in CSV_WORDS and variant not in distractors and variant != target_word:
+                distractors.append(variant)
+ 
+    # 2. Fill remaining slots with same-rhyme words from the CSV
+    rhyme_key = target_word[-2:] if len(target_word) >= 2 else target_word[-1:]
+    rhyme_pool = [
+        w for w in CSV_WORDS
+        if w.endswith(rhyme_key) and w != target_word and w not in distractors
+    ]
+    random.shuffle(rhyme_pool)
+    distractors.extend(rhyme_pool)
+ 
+    # 3. Last resort: same-length words
+    if len(distractors) < 2:
+        length_pool = [
+            w for w in CSV_WORDS
+            if len(w) == len(target_word) and w != target_word and w not in distractors
+        ]
+        random.shuffle(length_pool)
+        distractors.extend(length_pool)
+ 
+    options = [target_word] + distractors[:2]
+    random.shuffle(options)
+    return options
+ 
+ 
+# =============================================================================
+# STEP 1+2: GET /get_personalized_question
+#
+# Step 1 — Check Level (user → Level_3 → Q#) for a stored error word.
+# Step 2 — If none found, fall back to Assessment_Test (user → Level_3 → Q#).
+# Step 3 — Use that error word with find_similar_words_from_csv() to build
+#           the therapy question content from the CSV.
+# Step 4 — Return to frontend.
+# =============================================================================
+@app.route('/get_personalized_question', methods=['GET'])
+def get_personalized_question():
+    user_id = request.args.get('user_id')
+    q_num   = int(request.args.get('question_number', '11'))
+ 
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+ 
+    try:
+        db = get_db()
+ 
+        # ── Step 1: Updated to reference 'Level' instead of 'Level_Schema' ─────
+        level_ref = (
+            db.collection('Level')
+              .document(user_id)
+              .collection('Level_3')
+              .document(str(q_num))
+        )
+        # ── Step 2: Assessment_Test fallback ──────────────────────────────────
+        assessment_ref = (
+            db.collection('Assessment_Test')
+              .document(user_id)
+              .collection('Level_3')
+              .document(str(q_num))
+        )
+ 
+        level_doc  = level_ref.get()
+        assess_doc = assessment_ref.get()
+ 
+        errors = []
+        source  = "default"
+ 
+        if level_doc.exists:
+            lvl_errors = level_doc.to_dict().get("Error", [])
+            if lvl_errors:
+                errors = lvl_errors
+                source = "Level" # Updated log source name
+ 
+        if not errors and assess_doc.exists:
+            asmnt_errors = assess_doc.to_dict().get("Error", [])
+            if asmnt_errors:
+                errors = asmnt_errors
+                source = "Assessment_Test"
+ 
+        # The first error in the list is what we focus on this session
+        error_word = errors[0].strip().lower() if errors else "cat"
+        print(f"(Q{q_num}) User={user_id} | Source={source} | Error word='{error_word}'")
+ 
+        # ── Step 3: Build question content from CSV ───────────────────────────
+        response_data    = []
+        instruction_text = ""
+ 
+        if q_num == 11:
+            instruction_text = "Circle the option that matches with the word."
+            therapy_words = find_similar_words_from_csv(error_word, count=4)
+            for tw in therapy_words:
+                options = build_distractor_options_for_q11(tw)
+                response_data.append({"target": tw, "options": options})
+ 
+        elif q_num == 12:
+            instruction_text = "Read the following words out loud."
+            response_data = find_similar_words_from_csv(error_word, count=5)
+ 
+        elif q_num == 13:
+            instruction_text = "Circle the words that rhyme the same."
+            response_data = find_similar_words_from_csv(error_word, count=12)
+ 
+        elif q_num == 14:
+            instruction_text = f'Circle all "{error_word}".'
+            distractors = find_similar_words_from_csv(error_word, count=9)[1:]
+            grid = [error_word] * 4 + distractors[:8]
+            random.shuffle(grid)
+            response_data = grid[:12]
+ 
+        elif q_num == 15:
+            instruction_text = "Write the word below in the boxes."
+            response_data = find_similar_words_from_csv(
+                error_word, count=4, required_length=len(error_word)
+            )
+ 
+        return jsonify({
+            "question_number":  q_num,
+            "instruction_text": instruction_text,
+            "target_word":      error_word,
+            "data":             response_data,
+            "audio_url":        None
+        }), 200
+ 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+ 
+ 
+# =============================================================================
+# STEP 4: process_therapy_submission  (shared helper)
+#
+#   WRONG  → store error_word in Level + increment Threshold_Count
+#   CORRECT→ remove the specific target_word from Level Error list.
+#            If no errors left, delete the document.
+# =============================================================================
+def process_therapy_submission(user_id, q_num, target_word, is_correct):
+    db = get_db()
+    # Updated collection reference to 'Level'
+    level_ref = (
+        db.collection('Level')
+          .document(user_id)
+          .collection('Level_3')
+          .document(str(q_num))
+    )
+
+    doc = level_ref.get()
+    existing = doc.to_dict() if doc.exists else {}
+    existing_errors = existing.get("Error", [])
+
+    if not is_correct:
+        current_threshold = existing.get("Threshold_Count", 0) + 1
+
+        # Deduplicate error list and add the word
+        if target_word not in existing_errors:
+            existing_errors.append(target_word)
+
+        # Stores data directly into the 'Level' collection
+        level_ref.set({
+            'Question Number':  int(q_num),
+            'Error':            existing_errors,
+            'Threshold_Count':  current_threshold
+        }, merge=True)
+
+        print(f"(THERAPY) User={user_id} Q{q_num}: WRONG — '{target_word}' stored in Level. "
+              f"Threshold={current_threshold}")
+    else:
+        # If correct, remove the specific word that was just practiced
+        if target_word in existing_errors:
+            existing_errors.remove(target_word)
+        
+        if not existing_errors:
+            # If no more words left, delete doc from Level
+            level_ref.delete()
+            print(f"(THERAPY) User={user_id} Q{q_num}: CORRECT — All words mastered, doc deleted from Level.")
+        else:
+            # Update the doc in Level with the word removed
+            level_ref.update({
+                'Error': existing_errors
+            })
+            print(f"(THERAPY) User={user_id} Q{q_num}: CORRECT — '{target_word}' removed from Level list.")
+            
+# =============================================================================
+# POST /check_answers_therapy
+# Called by: QuestionL11 (MCQ), QuestionL13 (rhyme grid), QuestionL14 (spot word)
+# =============================================================================
+@app.route('/check_answers_therapy', methods=['POST'])
+def check_answers_therapy():
+    try:
+        user_id        = request.form.get('user_id')
+        q_num          = request.form.get('question_number')
+        target_word    = request.form.get('target_word', 'unknown')
+        is_correct_str = request.form.get('is_correct', 'false')
+        is_correct     = is_correct_str.lower() == 'true'
+ 
+        if not user_id or not q_num:
+            return jsonify({"status": "error", "message": "Missing user_id or question_number"}), 400
+ 
+        process_therapy_submission(user_id, q_num, target_word, is_correct)
+        return jsonify({"status": "success"}), 200
+ 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+ 
+ 
+# =============================================================================
+# POST /transcribe_and_score_therapy
+# Called by: QuestionL12 (read-aloud)
+# Uses WhisperX + Jaro-Winkler (same pipeline as the assessment endpoint)
+# then calls process_therapy_submission to update Level_Schema.
+# =============================================================================
+@app.route('/transcribe_and_score_therapy', methods=['POST'])
+def transcribe_and_score_therapy():
+    if 'audio' not in request.files or 'target_word' not in request.form:
+        return jsonify({"error": "Missing audio file or target_word"}), 400
+ 
+    user_id     = request.form.get('user_id')
+    target_word = request.form['target_word'].lower().strip()
+    q_num       = request.form.get('question_number', '12')
+ 
+    file     = request.files['audio']
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+ 
+    try:
+        # 1. Transcribe with WhisperX
+        audio  = whisperx.load_audio(filepath)
+        result = model.transcribe(audio, batch_size=8, language="en")
+        os.remove(filepath)
+ 
+        # 2. Clean transcription and grab the last spoken word
+        raw_text          = " ".join([s["text"] for s in result["segments"]]).strip().lower()
+        transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
+        words_spoken      = transcribed_clean.split()
+        word_to_compare   = words_spoken[-1] if words_spoken else ""
+ 
+        # 3. Jaro-Winkler similarity
+        similarity  = jellyfish.jaro_winkler_similarity(target_word, word_to_compare)
+        is_correct  = bool(similarity >= 0.65)
+ 
+        print(f"(THERAPY Q{q_num}) Target='{target_word}' | Heard='{word_to_compare}' "
+              f"| Score={similarity:.2f} | Correct={is_correct}")
+ 
+        # 4. Update Level_Schema
+        if user_id:
+            process_therapy_submission(user_id, q_num, target_word, is_correct)
+ 
+        return jsonify({
+            "status":           "success",
+            "target_word":      target_word,
+            "transcribed_word": word_to_compare,
+            "similarity_score": similarity,
+            "is_correct":       is_correct
+        }), 200
+ 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+ 
+ 
+# =============================================================================
+# POST /predict_handwriting_batch_therapy
+# Called by: QuestionL15 (handwriting)
+# Runs real letter_predict / g_handler_letter models, then updates Level_Schema.
+# =============================================================================
+@app.route("/predict_handwriting_batch_therapy", methods=['POST'])
+def predict_handwriting_batch_therapy():
+    try:
+        user_id        = request.form.get('user_id')
+        target_word    = request.form.get('target_word', '')
+        q_num          = request.form.get('question_number', '15')
+        uploaded_files = request.files.getlist("images")
+ 
+        print(f"(THERAPY Q{q_num}) Handwriting: user={user_id} word='{target_word}' "
+              f"files={len(uploaded_files)}")
+ 
+        if not user_id or not target_word or not uploaded_files:
+            return jsonify({"status": "error", "message": "Missing data"}), 400
+ 
+        detected_errors = []
+ 
+        for i, file in enumerate(uploaded_files):
+            if i >= len(target_word):
+                break
+ 
+            expected_char = target_word[i]
+            img = Image.open(file.stream).convert("RGB")
+ 
+            # Choose model based on letter (matches assessment endpoint logic)
+            if expected_char.lower() in ['a', 'i', 'g', 'r']:
+                pred_response = g_handler_letter(img)
+            else:
+                pred_response = letter_predict(img)
+ 
+            # Extract predicted string
+            model_predict = str(pred_response)
+            if isinstance(pred_response, dict) and 'prediction' in pred_response:
+                for x in pred_response['prediction']:
+                    if isinstance(x, str):
+                        model_predict = x
+ 
+            print(f"  [{i}] expected='{expected_char}' predicted='{model_predict}'")
+ 
+            # Compare — same special-case exceptions as the assessment endpoint
+            if model_predict.lower() != expected_char.lower():
+                is_exception = (
+                    (expected_char.lower() == 'o' and model_predict in ('O_caps', '0'))    or
+                    (expected_char.lower() == 's' and model_predict in ('S_caps', '5'))    or
+                    (expected_char.lower() == 'w' and model_predict == 'W_caps')           or
+                    (expected_char        == 'T'  and model_predict == 'T_caps')           or
+                    (expected_char        == 'b'  and model_predict == 'B_caps')           or
+                    (expected_char        == 'H'  and model_predict == 'H_caps')           or
+                    (expected_char        == 'g'  and model_predict == '9')
+                )
+                if not is_exception:
+                    detected_errors.append(expected_char)
+ 
+        is_correct = len(detected_errors) == 0
+        process_therapy_submission(user_id, q_num, target_word, is_correct)
+ 
+        return jsonify({
+            "status":    "success",
+            "is_correct": is_correct,
+            "errors":    detected_errors
+        }), 200
+ 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 
