@@ -656,7 +656,8 @@ def predict_handwriting_batch():
                 # We use .lower() to allow 'F' == 'f'
 
                 if model_predict.lower() != expected_char.lower():
-                    if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0)):
+                    if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0) or
+                        expected_char.lower()=='b' and (str(model_predict) =='B_caps')):
                         continue
                     # Record the error
                     else:
@@ -698,10 +699,53 @@ def select_cartoon():
         
         success = store_cartoon_selection(user_id, cartoon_name)
         
-        if success:
-            return "Success"
-        else:
+        if not success:
             return "Database Error"
+    try: 
+        db = get_db()
+        level2_ref = db.collection('Assessment_Test') \
+                    .document(user_id) \
+                    .collection('Level_2')
+
+        docs = level2_ref.stream()
+
+        all_errors = []
+        for doc in docs:
+
+            doc_data = doc.to_dict()
+
+            if doc_data.get("Answer") == "Incorrect":
+
+                errors = doc_data.get("Error", [])
+
+                if isinstance(errors, list):
+                    all_errors.extend(errors)
+        letters = []
+
+        for word in all_errors:
+
+            clean_word = re.sub(r'[^a-zA-Z]', '', word)
+
+            for ch in clean_word:
+                letters.append(ch.lower())
+
+        # Remove duplicates
+        unique_letters = list(dict.fromkeys(letters))
+        level2_ref = db.collection('Level') \
+            .document(user_id) \
+            .collection('Level 2')
+
+        for letter in unique_letters:
+            level2_ref.document(letter).set({
+                "letter": letter,
+                "count": 0
+            })
+        print("User id: ", user_id)
+        print("User Errors: ", unique_letters)
+    
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
             
     return "Error: Missing data"
 
@@ -847,6 +891,11 @@ def check_answers_q18():
         print(f"Error: {e}")
         return str(e), 500
 #level 4 Question 17 and 19
+
+
+
+
+
 @app.route("/predict_handwriting_sentence", methods=['POST'])
 def predict_handwriting_sentence():
     user_id = request.form.get('user_id')
@@ -905,7 +954,8 @@ def predict_handwriting_sentence():
                             (expected_char=='T' and str(model_predict)=='T_caps') or 
                             (expected_char=='b' and str(model_predict)=='B_caps') or 
                             (expected_char=='H' and str(model_predict)=='H_caps') or
-                            (expected_char=='g' and str(model_predict)=='9')):
+                            (expected_char=='g' and str(model_predict)=='9')or
+                            (expected_char=='m' and str(model_predict)=='n')):
                             continue
                         # Record the error
                         else:
@@ -1139,8 +1189,16 @@ def get_user_scores(user_id):
                 "level": level_name,
                 "score": f"{correct_answers}/{total_questions}"
             })
+        level2_therapy_ref = db.collection('Level') \
+        .document(user_id) \
+        .collection('Level 2')
 
-        return jsonify({"status": "success", "data": scores_summary}), 200
+        level2_docs = list(level2_therapy_ref.stream())
+
+        level2_empty = len(level2_docs) == 0
+        print(level2_empty)
+
+        return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
 
     except Exception as e:
         print(f"Flask API Error: {e}")
@@ -1292,6 +1350,199 @@ def predict_direction():
     except Exception as e:
         print(f"(ERROR) /predict_direction failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error during prediction"}), 500
+
+
+@app.route('/TherapyLevel2', methods=['POST'])
+def TherapyLevel2():
+    print("Backend reached!")
+    user_id = request.form.get('user_id')
+    print(f"User ID received: {user_id}")
+    if not user_id:
+        return jsonify({"error": "User ID missing"}), 400
+    
+    db = get_db()
+
+    level2_ref = db.collection('Level') \
+        .document(user_id) \
+        .collection('Level 2')
+
+    docs = level2_ref.stream()
+
+    letters_array = []
+
+    for doc in docs:
+        letters_array.append(doc.id)
+    
+    print (letters_array)
+    
+    return jsonify(letters_array)
+
+
+def decrement_therapylevel2_count(user_id,expected_Letter):
+    db = get_db()
+    letter_ref = db.collection('Level') \
+    .document(user_id) \
+    .collection('Level 2') \
+    .document(expected_Letter)
+
+    expected_doc = letter_ref.get()
+
+    if expected_doc.exists:
+
+        expected_data = expected_doc.to_dict()
+
+        current_count = expected_data.get("count", 0)
+
+        print(f"{expected_Letter} count:", current_count)
+
+        #Decrement the count if current_count is not 0
+        if current_count > 0:
+
+            letter_ref.update({
+            "count": 0
+            })
+
+            print(f"{expected_Letter} count decremented")
+
+def increment_therapylevel2_count(user_id,expected_Letter):
+    db = get_db()
+    letter_ref = db.collection('Level') \
+    .document(user_id) \
+    .collection('Level 2') \
+    .document(expected_Letter)
+
+    letter_ref.update({
+    "count": firestore.Increment(1)
+    })
+
+    print(f"Count incremented for {expected_Letter}")
+    updated_doc = letter_ref.get()
+
+    if updated_doc.exists:
+
+        updated_data = updated_doc.to_dict()
+        current_count = updated_data.get("count", 0)
+        print(f"{expected_Letter} count:", current_count)
+
+        # Delete document if count reaches 6
+        if current_count >= 6:
+            letter_ref.delete()
+
+            print(f"{expected_Letter} deleted from Level 2")
+
+
+
+@app.route("/predict_therapy_level2",methods=['POST'])
+def predict_therapy_level2():
+    user_id=request.form.get('user_id')
+    question_number=request.form.get('question_number')
+    expected_Letter=request.form.get('expected_Letter')
+    file = request.files["file"]
+    db = get_db()
+    if user_id:
+        print("The User(id): ",user_id)
+        print("The Question Number: ",question_number)
+        print("Expected Letter: ",expected_Letter)
+        img = Image.open(file.stream).convert("RGB")
+        if expected_Letter == 'q':
+            prediction=g_handler_letter(img)
+            if prediction not in ['q','Q']:
+
+                decrement_therapylevel2_count(user_id,expected_Letter)
+                print("Error q")
+            else:
+                increment_therapylevel2_count(user_id,expected_Letter)
+                print("Correct q")
+        else:
+            pred=letter_predict(img)
+            model_predict=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict= x
+            # print(model_predict)
+            if expected_Letter == 'p':
+                if model_predict not in ['p','P_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error p")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct p")
+            elif expected_Letter == 'b':
+                if model_predict not in ['b', 'B_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error b")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct b")
+            elif expected_Letter == 'd':
+                if model_predict not in ['d','D_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error d")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct d")
+            else:
+                if expected_Letter in ['a','i','n','u','y']:
+                    prediction=g_handler_letter(img)
+                    if prediction != expected_Letter:
+                        decrement_therapylevel2_count(user_id,expected_Letter)
+                        print(f"Error {expected_Letter}")
+                    else:
+                        increment_therapylevel2_count(user_id,expected_Letter)
+                        print(f"Correct {expected_Letter}")
+                else :
+                    if expected_Letter == 'c':
+                        if model_predict not in ['c','C_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error c")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct c")
+                    elif expected_Letter == 'l':
+                        if model_predict not in ['l','L_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error l")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct l")
+                    elif expected_Letter == 'o':
+                        if model_predict not in ['o','O_caps',0]:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error o")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct o")
+                    elif expected_Letter == 's':
+                        if model_predict not in ['s','S_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error s")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct s")
+                    else:
+               
+
+                        if model_predict != expected_Letter:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            
+                            print(f"Error {expected_Letter}")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+
+                            print(f"Correct {expected_Letter}")
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001,threaded=True)
 
