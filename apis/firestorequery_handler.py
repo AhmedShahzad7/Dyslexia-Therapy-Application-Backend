@@ -1,4 +1,5 @@
 from config.firebase import get_db
+from google.cloud.firestore_v1 import Increment
 from firebase_admin import firestore
 
 
@@ -209,5 +210,132 @@ def store_voice_error1(user_id, targetname, error, question_number, detected_err
         return False
 
 
-#=========================================Levels================================
+#========================================= PERSONALIZED Levels================================
 
+#LEVEL 1 
+
+def update_therapy_progress(user_id, target_word, is_correct, question_number, level_name="Level_1"):
+    db = get_db()
+    q_str = str(question_number)
+    MASTERY_THRESHOLD = 3
+
+    # Point directly to your main collection: Level -> userid -> Level_1 -> q_str
+    doc_ref = db.collection('Level') \
+                .document(user_id) \
+                .collection(level_name) \
+                .document(q_str)
+
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        # Failsafe initialization if something bypassed the GET route
+        doc_ref.set({
+            'Question Number': int(question_number),
+            'Error': [target_word.capitalize()],
+            'success_count': 0,
+        })
+        current_success = 0
+    else:
+        current_success = doc.to_dict().get('success_count', 0)
+
+    if is_correct:
+        new_success_count = current_success + 1
+        
+        if new_success_count >= MASTERY_THRESHOLD:
+            # THE GRADUATION TRIGGER: Purge the document entirely
+            doc_ref.delete()
+            print(f"(SUCCESS) Mastery reached! Document Q{q_str} completely removed from 'Level' collection.")
+            return True, "mastered"
+        else:
+            # Safely increment the counter
+            doc_ref.update({'success_count': Increment(1)})
+            print(f"(PROGRESS) Correct answer. Success count now {new_success_count}/5.")
+            return True, "progressing"
+    else:
+        # Penalty: reset consecutive counter back to 0
+        doc_ref.update({
+            'success_count': 0,
+        })
+        print(f"(PENALTY) Incorrect answer for '{target_word}'. Counter reset to 0.")
+        return False, "reset"
+
+
+
+
+
+
+# --- LEVEL 4 PROGRESS UPDATER (PARALLEL DICTIONARY SAFE) ---
+def update_therapy_progress_l4(user_id, target_word, is_correct, question_number):
+    try:
+        db = get_db()
+        q_str = str(question_number)
+        MASTERY_THRESHOLD = 5
+        
+        doc_ref = db.collection('Level') \
+                    .document(user_id) \
+                    .collection('Level_4') \
+                    .document(q_str)
+                    
+        doc = doc_ref.get()
+        clean_target = str(target_word).strip().lower()
+        
+        # 1. Failsafe Initialization
+        if not doc.exists:
+            initial_array = [clean_target]
+            initial_map = {clean_target: 1 if is_correct else 0}
+            doc_ref.set({
+                'Question Number': int(question_number),
+                'Error': initial_array,
+                'scores_tracker': initial_map,
+                'success_count': 0
+            })
+            print(f"(L4 INIT) Seeded Q{q_str} with parallel tracking for '{clean_target}'.")
+            return True, "progressing" if is_correct else "reset"
+            
+        data = doc.to_dict()
+        raw_errors = data.get('Error', [])
+        current_errors = [str(w).strip().lower() for w in (raw_errors if isinstance(raw_errors, list) else [raw_errors]) if str(w).strip()]
+        
+        scores_map = data.get('scores_tracker', {})
+        if not isinstance(scores_map, dict):
+            scores_map = {w: 0 for w in current_errors}
+            
+        if clean_target not in scores_map:
+            scores_map[clean_target] = 0
+            if clean_target not in current_errors:
+                current_errors.append(clean_target)
+                
+        # 2. Process Outcomes Independently
+        if is_correct:
+            scores_map[clean_target] += 1
+            current_score = scores_map[clean_target]
+            
+            if current_score >= MASTERY_THRESHOLD:
+                updated_errors = [w for w in current_errors if w != clean_target]
+                scores_map.pop(clean_target, None)
+                
+                if not updated_errors:
+                    doc_ref.delete()
+                    print(f"(L4 SUCCESS) Entire array mastered! Document Q{q_str} completely removed.")
+                    return True, "mastered"
+                else:
+                    doc_ref.update({
+                        'Error': updated_errors,
+                        'scores_tracker': scores_map
+                    })
+                    print(f"(L4 PROGRESS) Word '{clean_target}' mastered! Shifted out. Remaining: {updated_errors}")
+                    return True, "progressing"
+            else:
+                doc_ref.update({'scores_tracker': scores_map})
+                print(f"(L4 PROGRESS) Correct match. '{clean_target}' count now {current_score}/{MASTERY_THRESHOLD}.")
+                return True, "progressing"
+        else:
+            scores_map[clean_target] = 0
+            doc_ref.update({'scores_tracker': scores_map})
+            print(f"(L4 PENALTY) Incorrect match. '{clean_target}' counter reset to 0.")
+            return False, "reset"
+            
+    except Exception as e:
+        print(f"(CRITICAL ERROR) update_therapy_progress_l4 failed: {str(e)}")
+        return False, "error"
+ 

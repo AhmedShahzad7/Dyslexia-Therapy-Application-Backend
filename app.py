@@ -21,10 +21,7 @@ from apis.model_api import letter_predict
 from apis.model_api import direction_predict
 from apis.model_api import predict_handwriting
 from apis.letter_handler import g_handler_letter
-from apis.firestorequery_handler import store_direction_error
-from apis.firestorequery_handler import store_mcq_error
-from apis.firestorequery_handler import store_cartoon_selection
-from apis.firestorequery_handler import store_voice_error,store_voice_error1
+from apis.firestorequery_handler import *
 import requests
 
 
@@ -146,20 +143,20 @@ def predict_letter():
 
 
 #DIRECTOIN API REQUEST ALEVEL 1 QUESTION 1
-# @app.route("/predict_direction", methods=["POST"])
-# def predict_direction():
-#     user_id = request.form.get('user_id')
-#     file = request.files["file"]
+@app.route("/predict_direction", methods=["POST"])
+def predict_direction():
+    user_id = request.form.get('user_id')
+    file = request.files["file"]
 
-#     if user_id:
-#         print(f"\n(DEBUG) Assessment Level 1 Question 1 RECEIVED REQUEST: {user_id}!!\n")
+    if user_id:
+        print(f"\n(DEBUG) Assessment Level 1 Question 1 RECEIVED REQUEST: {user_id}!!\n")
         
-#         img = Image.open(file.stream).convert("RGB")  
-#         direction=direction_predict(img)
-#         print(direction)
-#         update_success = store_direction_error(user_id, direction,"1")
-#         return direction
-#     return "error"
+        img = Image.open(file.stream).convert("RGB")  
+        direction=direction_predict(img)
+        print(direction)
+        update_success = store_direction_error(user_id, direction,"1")
+        return direction
+    return "error"
 
 #DIRECTION MCQ ALEVEL 1 QUESTION 2
 @app.route("/predict_direction_mcq", methods=["POST"])
@@ -687,23 +684,6 @@ def predict_handwriting_batch():
 
     return "Missing Data", 400
 
-# CARTOON SELECTION
-@app.route("/select_cartoon", methods=["POST"])
-def select_cartoon():
-    user_id = request.form.get('user_id')
-    cartoon_name = request.form.get('cartoon_name')
-    
-    if user_id and cartoon_name:
-        print(f"\n(DEBUG) Cartoon Selection Received: User={user_id}, Cartoon={cartoon_name}\n")
-        
-        success = store_cartoon_selection(user_id, cartoon_name)
-        
-        if success:
-            return "Success"
-        else:
-            return "Database Error"
-            
-    return "Error: Missing data"
 
 
 @app.route('/question16', methods=['POST'])
@@ -1088,7 +1068,6 @@ def get_common_errors(user_id):
         return jsonify({"error": str(e)}), 500
     
 
-
 #Home Sceen Popup
 @app.route('/api/scores/<user_id>', methods=['GET'])
 def get_user_scores(user_id):
@@ -1139,8 +1118,16 @@ def get_user_scores(user_id):
                 "level": level_name,
                 "score": f"{correct_answers}/{total_questions}"
             })
+        level2_therapy_ref = db.collection('Level') \
+        .document(user_id) \
+        .collection('Level 2')
 
-        return jsonify({"status": "success", "data": scores_summary}), 200
+        level2_docs = list(level2_therapy_ref.stream())
+
+        level2_empty = len(level2_docs) == 0
+        print(level2_empty)
+
+        return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
 
     except Exception as e:
         print(f"Flask API Error: {e}")
@@ -1153,16 +1140,18 @@ def get_user_scores(user_id):
 #=========================#
 from typecast import Typecast
 from typecast.models import TTSRequest
-
+import random
 
 # 1. Initialize the Typecast client
 # REPLACE THIS WITH YOUR REAL API KEY FROM THE DASHBOARD
-typecast_client = Typecast(api_key="ENTER API KEY HERE") 
+typecast_client = Typecast(api_key="__pltGcPSWdfiN4gPgxUwh2tFx4Efzw4wWCex4s3yCDQ8") 
 CHARACTER_ID = "tc_645b39b760386589fd851133" # Your Doraemon-like character
 
 # 2. Ensure the audio directory exists on server startup
+# Ensure the audio directory is securely mapped within your static folder
 AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'audio')
 os.makedirs(AUDIO_DIR, exist_ok=True)
+
 
 def generate_typecast_audio(text, filename):
     """
@@ -1183,9 +1172,8 @@ def generate_typecast_audio(text, filename):
             f.write(response.audio_data)
 
         # Build the URL that Android will use to download this file
-        # request.host automatically handles your IP and Port (e.g. 192.168.1.9:5001)
         audio_url = f"http://{request.host}/static/audio/{filename}"
-        print(f"(DEBUG) Audio generated successfully: {audio_url}")
+        print(f"(DEBUG) Audio generated successfully via API: {audio_url}")
         
         return audio_url
 
@@ -1193,105 +1181,1094 @@ def generate_typecast_audio(text, filename):
         print(f"(ERROR) Typecast SDK: {str(e)}")
         return None
 
-# --- UPDATED GET ROUTE ---
-@app.route('/get_personalized_question', methods=['GET'])
-def get_personalized_question():
+
+def get_or_generate_audio(text, filename):
+    filepath = os.path.join(AUDIO_DIR, filename)
+    if os.path.exists(filepath):
+        return f"http://{request.host}/static/audio/{filename}"
+    return generate_typecast_audio(text, filename)
+
+
+
+def ensure_word_audio_exists(word):
+    clean_word = word.strip().lower()
+    filename = f"cached_word_v2_{clean_word}.wav"
+    # Reuses existing audio generator to ensure the file exists in static/audio/
+    return get_or_generate_audio(word.strip().capitalize(), filename)
+
+
+
+SLOT_CONFIGS = {
+    1: {"type": "DRAWING", "prefix": "Draw the arrow"},
+    2: {"type": "MCQ",     "prefix": "Click the"},     # Strictly MCQ
+    3: {"type": "MCQ", "prefix": "Click the direction of given arrow ?"},
+    4: {"type": "MCQ", "prefix":"Match the arrow to the correct word"},
+}
+
+
+
+
+@app.route('/init_level_session', methods=['GET'])
+def init_level_session():
     user_id = request.args.get('user_id')
-    # Grab the question number from the URL, default to '1'
-    q_num_param = request.args.get('question_number', '1') 
-    
     if not user_id:
         return jsonify({"error": "Missing user_id"}), 400
 
     try:
         db = get_db()
-        # Dynamically pulls from Level_1 -> Document (q_num_param)
-        doc_ref = db.collection('Assessment_Test') \
-                    .document(user_id) \
-                    .collection('Level_1') \
-                    .document(str(q_num_param))
+        session_questions = []
+        MASTERY_THRESHOLD = 5 
+
+        # Pre-cache single word audio for Q4 speaker interactions securely
+        for direction in ["Up", "Down", "Left", "Right"]:
+            ensure_word_audio_exists(direction)
+
+        # 1. CHECK GRADUATION STATUS
+        meta_ref = db.collection('Level').document(user_id).collection('Level_1').document('meta_status')
+        meta_doc = meta_ref.get()
+        is_graduated = meta_doc.to_dict().get('graduated', False) if meta_doc.exists else False
+
+        # --- MAINTENANCE MODE ---
+        if is_graduated:
+            directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
+            rand_dir = random.choice(directions)
+            q_type = random.choice(["DRAWING", "MCQ_GRID", "MCQ_IDENTIFY", "MCQ_MATCH"])
+            clean_word = rand_dir.lower()
+
+            if q_type == "DRAWING":
+                instruction_text = f"Draw the arrow {rand_dir}"
+                audio_filename = f"cached_draw_{clean_word}.wav"
+                mapped_type = "DRAWING"
+                mapped_slot = 99 
+            elif q_type == "MCQ_GRID":
+                instruction_text = f"Click the {rand_dir} Arrow"
+                audio_filename = f"cached_click_{clean_word}.wav"
+                mapped_type = "MCQ"
+                mapped_slot = 2  
+            elif q_type == "MCQ_IDENTIFY":
+                rand_dir = random.choice(["Up", "Down", "Left", "Right"])
+                clean_word = rand_dir.lower()
+                instruction_text = "Click the direction of the given arrow"
+                audio_filename = f"cached_identify_{clean_word}.wav"
+                mapped_type = "MCQ"
+                mapped_slot = 3  
+            else: # MCQ_MATCH
+                rand_dir = random.choice(["Up", "Down", "Left", "Right"])
+                clean_word = rand_dir.lower()
+                instruction_text = "Match the arrow to the correct word"
+                audio_filename = f"cached_match_v2_{clean_word}.wav"
+                mapped_type = "MCQ"
+                mapped_slot = 4
+
+            audio_url = get_or_generate_audio(instruction_text, audio_filename)
+
+            return jsonify({
+                "status": "success",
+                "total_questions": 1,
+                "maintenance_mode": True,
+                "questions": [{
+                    "db_question_number": mapped_slot, 
+                    "question_type": mapped_type,
+                    "ui_slot_assigned": mapped_slot,
+                    "target_word": rand_dir,
+                    "instruction_text": instruction_text,
+                    "audio_url": audio_url
+                }]
+            }), 200
+
+        # --- STANDARD THERAPY MODE ---
+        active_error_pool = []
+
+        for q_num in range(1, 5): 
+            doc_id = str(q_num)
+            active_ref = db.collection('Level').document(user_id).collection('Level_1').document(doc_id)
+            active_doc = active_ref.get()
+            target_word = None
+
+            if active_doc.exists:
+                data = active_doc.to_dict()
+                current_success = data.get('success_count', 0)
+                if current_success < MASTERY_THRESHOLD:
+                    target_word = data.get("Error", ["Up"])[0]
+            else:
+                assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_1').document(doc_id)
+                assess_doc = assess_ref.get()
+                
+                if assess_doc.exists:
+                    assess_data = assess_doc.to_dict()
+                    if assess_data and "Error" in assess_data and isinstance(assess_data["Error"], list) and len(assess_data["Error"]) > 0:
+                        target_word = assess_data["Error"][0]
+                        active_ref.set({
+                            'Question Number': q_num,
+                            'Error': [target_word.capitalize()],
+                            'success_count': 0,
+                        })
+
+            if target_word:
+                active_error_pool.append({
+                    "original_db_slot": q_num,
+                    "word": target_word.strip().capitalize()
+                })
+
+        if len(active_error_pool) == 0:
+            meta_ref.set({'graduated': True})
+            return init_level_session()
+
+        random.shuffle(active_error_pool)
+
+        available_ui_slots = sorted(list(SLOT_CONFIGS.keys()))
         
-        doc = doc_ref.get()
-        data = doc.to_dict() if doc.exists else None
+        for index, error_obj in enumerate(active_error_pool):
+            if index >= len(available_ui_slots):
+                break
+                
+            ui_slot_num = available_ui_slots[index]
+            config = SLOT_CONFIGS[ui_slot_num]
+            target_word = error_obj["word"]
+            clean_word = target_word.lower()
 
-        if data and "Error" in data and isinstance(data["Error"], list) and len(data["Error"]) > 0:
-            target_word = data["Error"][0]
-        else:
-            target_word = "Up" # Default target
+            if config["type"] == "MCQ":
+                if ui_slot_num == 3:
+                    instruction_text = "Click the direction of the given arrow"
+                    audio_filename = f"cached_identify_v2_{clean_word}.wav"
+                elif ui_slot_num == 4:
+                    instruction_text = "Match the arrow to the correct word"
+                    audio_filename = f"cached_match_v2_{clean_word}.wav"
+                else:
+                    instruction_text = f"{config['prefix']} {target_word} Arrow"
+                    audio_filename = f"cached_click_v2_{clean_word}.wav"
+            else:
+                instruction_text = f"{config['prefix']} {target_word}"
+                audio_filename = f"cached_draw_v2_{clean_word}.wav" 
 
-        question_number = data.get("Question number", int(q_num_param)) if data else int(q_num_param)
-        instruction_text = f"Draw the arrow {target_word}"
+            audio_url = get_or_generate_audio(instruction_text, audio_filename)
 
-        # Create a unique filename: e.g., user123_q1.wav
-        audio_filename = f"{user_id}_q{question_number}.wav"
-        audio_url = generate_typecast_audio(instruction_text, audio_filename)
+            session_questions.append({
+                "db_question_number": error_obj["original_db_slot"],  
+                "question_type": config["type"], 
+                "ui_slot_assigned": ui_slot_num, 
+                "target_word": target_word,
+                "instruction_text": instruction_text,
+                "audio_url": audio_url
+            })
 
-        response = {
-            "question_number": question_number,
-            "target_word": target_word,
-            "instruction_text": instruction_text, 
-            "audio_url": audio_url 
-        }
-        
-        return jsonify(response), 200
+        return jsonify({
+            "status": "success",
+            "total_questions": len(session_questions),
+            "maintenance_mode": False,
+            "questions": session_questions
+        }), 200
 
     except Exception as e:
-        print(f"(ERROR) /get_personalized_question: {str(e)}")
-        return jsonify({"error": "Failed to fetch question data"}), 500
+        print(f"(ERROR) /init_level_session failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Failed to initialize therapy session"}), 500
 
 
-@app.route('/predict_direction', methods=['POST'])
-def predict_direction():
-    # 1. Validate incoming request
+
+
+
+
+
+
+@app.route('/predict_therapy_direction', methods=['POST'])
+def predict_therapy_direction():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
     file = request.files['file']
     user_id = request.form.get('user_id')
-    
-    # ---------------------------------------------------------
-    # THE FIX: Add defaults for older hardcoded Kotlin files!
-    # If a file doesn't send these, assume it's the old Question 1 ("Up")
-    # ---------------------------------------------------------
-    target_word = request.form.get('target_word', 'Up')
+    target_word = request.form.get('target_word')
     question_number = request.form.get('question_number', '1') 
 
-    # We removed 'not target_word' from the error check because it will always 
-    # have a value now (either the one sent by Kotlin, or the default 'Up').
-    if not user_id:
-        return jsonify({"error": "Missing user_id in form data"}), 400
-
-    print(f"\n(DEBUG) Assessment Level 1 Question {question_number} RECEIVED REQUEST: {user_id}!!")
+    if not user_id or not target_word:
+        return jsonify({"error": "Missing critical therapy data"}), 400
 
     try:
-        # Process image and run TensorFlow model
         img = Image.open(file.stream).convert("RGB")  
         model_prediction = direction_predict(img)
-        
-        # Clean strings and evaluate
         is_correct = (model_prediction.strip().lower() == target_word.strip().lower())
         
-        print(f"(DEBUG) Expected: {target_word} | Predicted: {model_prediction} | Correct: {is_correct}")
+        # Calls the handler to update counters or purge the document
+        _, mastery_status = update_therapy_progress(
+            user_id=user_id,
+            target_word=target_word,
+            is_correct=is_correct,
+            question_number=question_number,
+            level_name="Level_1"
+        )
 
-        # Update Firebase based on dynamic question number
-        if not is_correct:
-            store_direction_error(user_id, target_word, str(question_number))
-        else:
-            pass 
-
-        # IMPORTANT: The old Kotlin file expects a plain string returned (e.g., "Up"), 
-        # but our new system returns JSON. If your old Kotlin file crashes when trying 
-        # to read the response, you'll need to handle the JSON on the old frontend!
         return jsonify({
             "status": "success", 
             "correct": is_correct, 
             "detected": model_prediction,
-            "target": target_word
+            "target": target_word,
         }), 200
 
     except Exception as e:
-        print(f"(ERROR) /predict_direction failed:\n{traceback.format_exc()}")
-        return jsonify({"error": "Internal server error during prediction"}), 500
+        print(f"(ERROR) /predict_therapy_direction failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+
+# --- GET ROUTE FOR Q2 DYNAMIC MCQ ---
+@app.route('/verify_therapy_mcq', methods=['POST'])
+def verify_therapy_mcq():
+    user_id = request.form.get('user_id')
+    target_word = request.form.get('target_word')
+    arrow_selected = request.form.get('arrow_selected')
+    
+    # Crucial: Reads the actual database document ID passed from the session array
+    question_number = request.form.get('question_number', '2')
+
+    if not all([user_id, target_word, arrow_selected]):
+        return jsonify({"error": "Missing critical data"}), 400
+
+    try:
+        is_correct = (arrow_selected.strip().lower() == target_word.strip().lower())
+        
+        # Increments counters or purges the document if the mastery threshold is reached
+        _, mastery_status = update_therapy_progress(
+            user_id=user_id,
+            target_word=target_word,
+            is_correct=is_correct,
+            question_number=question_number,
+            level_name="Level_1"
+        )
+
+        return jsonify({
+            "status": "success", 
+            "correct": is_correct, 
+            "selected": arrow_selected,
+            "target": target_word,
+            "mastery_status": mastery_status  
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /verify_therapy_mcq failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+
+
+# --- POST ROUTE TO VERIFY Q3 SELECTION ---
+@app.route('/verify_therapy_q3', methods=['POST'])
+def verify_therapy_q3():
+    user_id = request.form.get('user_id')
+    target_word = request.form.get('target_word')
+    arrow_selected = request.form.get('arrow_selected')
+    question_number = request.form.get('question_number', '3')
+
+    if not all([user_id, target_word, arrow_selected]):
+        return jsonify({"error": "Missing critical data"}), 400
+
+    try:
+        is_correct = (arrow_selected.strip().lower() == target_word.strip().lower())
+        
+        _, mastery_status = update_therapy_progress(
+            user_id=user_id,
+            target_word=target_word,
+            is_correct=is_correct,
+            question_number=question_number,
+            level_name="Level_1"
+        )
+
+        return jsonify({
+            "status": "success", 
+            "correct": is_correct, 
+            "selected": arrow_selected,
+            "target": target_word,
+            "mastery_status": mastery_status  
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /verify_therapy_q3 failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# --- POST ROUTE TO VERIFY Q4 SELECTION ---
+@app.route('/verify_therapy_q4', methods=['POST'])
+def verify_therapy_q4():
+    user_id = request.form.get('user_id')
+    target_word = request.form.get('target_word')
+    arrow_selected = request.form.get('arrow_selected')
+    question_number = request.form.get('question_number', '4')
+
+    if not all([user_id, target_word, arrow_selected]):
+        return jsonify({"error": "Missing matching parameters"}), 400
+
+    try:
+        is_correct = (arrow_selected.strip().lower() == target_word.strip().lower())
+        
+        _, mastery_status = update_therapy_progress(
+            user_id=user_id,
+            target_word=target_word,
+            is_correct=is_correct,
+            question_number=question_number,
+            level_name="Level_1"
+        )
+
+        return jsonify({
+            "status": "success", 
+            "correct": is_correct, 
+            "validated_selection": arrow_selected.strip().capitalize(),
+            "target": target_word.strip().capitalize(),
+            "mastery_status": mastery_status  
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /verify_therapy_q4 failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+
+
+
+
+
+
+
+#----------------LEVEL 4------------------
+#----------------------------------------
+
+import pandas as pd
+from werkzeug.utils import secure_filename
+
+import os
+import random
+import re
+import traceback
+import pandas as pd
+
+# --- 1. PANDAS CSV MINING ENGINE (VARIABLE LENGTH / STRICTLY UNIQUE) ---
+def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
+    try:
+        base_dir = os.path.abspath(os.path.dirname(__file__))
+        csv_path = os.path.join(base_dir, 'models', 'DyslexiaDataSet.csv')
+        
+        if not os.path.exists(csv_path):
+            csv_path = 'models/DyslexiaDataSet.csv'
+
+        df = pd.read_csv(csv_path, header=None, names=['raw_text'])
+        df = df.dropna()
+        
+        # Aggressive space normalization to protect downstream UI drawing box allocation
+        df['raw_text'] = df['raw_text'].astype(str).apply(lambda x: " ".join(x.split()))
+        
+        valid_errors = [str(w).strip().lower() for w in error_list if str(w).strip()]
+        if not valid_errors:
+            valid_errors = ["bat", "cat", "rat"]
+
+        results = []
+        used_sentences = set() 
+        
+        # We attempt to reach max_count, but allow early exits if data is sparse
+        for i in range(max_count):
+            target_word = valid_errors[i % len(valid_errors)]
+            
+            def count_words(text):
+                return len(text.split())
+                
+            def count_boxes(text):
+                return sum(1 for c in text if c.isalnum())
+            
+            # --- 1. Primary Scan: Strict standalone word boundaries ---
+            pattern = r'\b' + re.escape(target_word) + r'\b'
+            matches = df[df['raw_text'].str.lower().str.contains(pattern, regex=True)]
+            
+            # --- 2. Secondary Scan: Standard Substring matching ---
+            if matches.empty:
+                matches = df[df['raw_text'].str.lower().str.contains(re.escape(target_word), regex=True)]
+            
+            # Apply task-specific constraints
+            if mode == "GRID_SELECT":
+                valid_matches = matches
+            elif mode == "VOICE":
+                valid_matches = matches[matches['raw_text'].apply(count_words) >= 3]
+            else: # WRITING / COMBO strict drawing constraints
+                valid_matches = matches[
+                    (matches['raw_text'].apply(count_words) >= 2) & 
+                    (matches['raw_text'].apply(count_boxes) <= 16)
+                ]
+            
+            # --- 3. Ultimate Fuzzy Fallback: Gather a Multi-Sample Pool ---
+            if valid_matches.empty:
+                print(f"(WARN) '{target_word}' missing exact match. Executing Jaro-Winkler multi-sample scan...")
+                fallback_candidates = []
+                
+                for raw_sentence in df['raw_text'].values:
+                    if mode == "VOICE" and count_words(raw_sentence) < 3:
+                        continue
+                    if mode in ["WRITING", "COMBO"] and (count_words(raw_sentence) < 2 or count_boxes(raw_sentence) > 16):
+                        continue
+                        
+                    tokens = re.sub(r'[^\w\s]', '', raw_sentence).lower().split()
+                    for token in tokens:
+                        score = jellyfish.jaro_winkler_similarity(target_word, token)
+                        if score >= 0.70:
+                            fallback_candidates.append(raw_sentence)
+                            break 
+                
+                if fallback_candidates:
+                    valid_matches = pd.DataFrame(fallback_candidates, columns=['raw_text'])
+                else:
+                    valid_matches = df # Ultimate absolute failsafe
+
+            # --- STRICT GLOBAL DEDUPLICATION ---
+            available = valid_matches[~valid_matches['raw_text'].isin(used_sentences)]
+            
+            # ---> CRITICAL FIX: If no unique sentences remain, STOP sampling and exit early <---
+            if available.empty:
+                print(f"(INFO) Exhausted unique contexts for '{target_word}'. Halting extraction at {len(results)} items.")
+                break 
+
+            sampled_sentence = available.sample(n=1)['raw_text'].values[0]
+            used_sentences.add(sampled_sentence)
+            
+            # --- Output Construction & Sanitization ---
+            if mode == "GRID_SELECT":
+                all_words = " ".join(df['raw_text'].values).split()
+                distractors = random.sample(all_words, 23)
+                grid_pool = distractors + [target_word]
+                random.shuffle(grid_pool)
+                final_string = " ".join(grid_pool)
+            else:
+                clean_text = re.sub(r'[^\w\s]', '', sampled_sentence)
+                final_string = " ".join(clean_text.split())
+
+            results.append({
+                "word": target_word.capitalize(),
+                "sentence": final_string
+            })
+            
+        # Fallback security: guarantee we return at least 1 valid item if everything failed entirely
+        if not results:
+            results.append({"word": valid_errors[0].capitalize(), "sentence": f"Practice the word {valid_errors[0]}"})
+            
+        return results
+
+    except Exception as e:
+        print(f"(CRITICAL ERROR) Pandas CSV Engine failed: {str(e)}")
+        traceback.print_exc()
+        return [{"word": "Fallback", "sentence": "System loaded a default string"}]
+
+
+# --- 3. LEVEL 4 INITIALIZATION ROUTE (STRICT SEQUENTIAL MULTIMODAL ORDER) ---
+@app.route('/init_level4_session', methods=['GET'])
+def init_level4_session():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    try: 
+        db = get_db()
+        session_questions = []
+        MASTERY_THRESHOLD = 5 
+
+        meta_ref = db.collection('Level').document(user_id).collection('Level_4').document('meta_status')
+        meta_doc = meta_ref.get()
+        is_graduated = meta_doc.to_dict().get('graduated', False) if meta_doc.exists else False
+
+        # --- MAINTENANCE MODE ---
+        if is_graduated:
+            mini_q_data = get_l4_targets_from_csv(dummy_errors, count=3, mode="VOICE")
+            instruction = "Read the sentence out loud"
+            audio_url = get_or_generate_audio(instruction, "l4_maint_sentence.wav")
+            
+            return jsonify({
+                "status": "success",
+                "total_questions": 1,
+                "maintenance_mode": True,
+                "questions": [{
+                    "db_question_number": 99,
+                    "question_type": "VOICE",
+                    "ui_slot_assigned": 1,
+                    "mini_questions": mini_q_data, 
+                    "instruction_text": instruction,
+                    "audio_url": audio_url
+                }]
+            }), 200
+
+        # Define fixed multimodal mappings matching absolute database document slots
+        slot_allocations = {
+            16: {"ui_slot": 1, "type": "VOICE", "instruction": "Read the sentence out loud"},
+            17: {"ui_slot": 2, "type": "WRITING", "instruction": "Rewrite the sentence below"},
+            18: {"ui_slot": 3, "type": "GRID_SELECT", "instruction": "Find and click the target word in the grid."},
+            19: {"ui_slot": 4, "type": "COMBO", "instruction": "Read the word aloud, then type it out."}
+        }
+
+        active_error_pool = []
+
+        # Scan exactly for absolute sequential database keys (16, 17, 18, 19)
+        for q_num in range(16, 20):
+            doc_id = str(q_num)
+            active_ref = db.collection('Level').document(user_id).collection('Level_4').document(doc_id)
+            active_doc = active_ref.get()
+            error_list_payload = []
+
+            if active_doc.exists:
+                data = active_doc.to_dict()
+                raw_err = data.get("Error", [])
+                scores_map = data.get("scores_tracker", {})
+                
+                for item in raw_err if isinstance(raw_err, list) else [raw_err]:
+                    clean_str = str(item).strip().lower()
+                    if clean_str and scores_map.get(clean_str, 0) < MASTERY_THRESHOLD:
+                        error_list_payload.append(clean_str)
+            else:
+                assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_4').document(doc_id)
+                assess_doc = assess_ref.get()
+                if assess_doc.exists:
+                    assess_data = assess_doc.to_dict()
+                    raw_err = assess_data.get("Error", []) if assess_data else []
+                    error_list_payload = [str(w).strip().lower() for w in (raw_err if isinstance(raw_err, list) else [raw_err]) if str(w).strip()]
+                    
+                    if error_list_payload:
+                        init_scores = {w: 0 for w in error_list_payload}
+                        active_ref.set({
+                            'Question Number': q_num,
+                            'Error': error_list_payload,
+                            'scores_tracker': init_scores,
+                            'success_count': 0,
+                        })
+
+            if error_list_payload:
+                active_error_pool.append({
+                    "original_db_slot": q_num,
+                    "errors": error_list_payload
+                })
+
+        # Graduate if the entire pool is depleted across all multimodal slots
+        if len(active_error_pool) == 0:
+            meta_ref.set({'graduated': True})
+            return init_level4_session()
+
+        # ---> CRITICAL FIX: The random.shuffle() statement has been completely removed <---
+        # Build the final payload keeping items locked in their natural absolute database order
+
+        for error_obj in active_error_pool:
+            db_num = error_obj["original_db_slot"]
+            current_error_array = error_obj["errors"]
+            config = slot_allocations[db_num]
+            
+            ui_slot = config["ui_slot"]
+            q_type = config["type"]
+            instruction = config["instruction"]
+            
+            # Mine exactly 3 paired mini-question targets applying distinct natural constraints per mode
+            mini_q_data = get_l4_targets_from_csv(current_error_array,max_count=3, mode=q_type)
+             
+            clean_audio_name = f"l4_slot{ui_slot}.wav"
+            audio_url = get_or_generate_audio(instruction, clean_audio_name)
+
+            session_questions.append({
+                "db_question_number": db_num, 
+                "question_type": q_type,
+                "ui_slot_assigned": ui_slot,  
+                "mini_questions": mini_q_data, 
+                "instruction_text": instruction,
+                "audio_url": audio_url
+            })
+            print(f"CURRENT SESSION LIST OF QUESTIONS==== \n {session_questions}")
+
+        return jsonify({
+            "status": "success",
+            "total_questions": len(session_questions),
+            "maintenance_mode": False,
+            "questions": session_questions
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /init_level4_session failed:\n{traceback.format_exc()}")
+        return jsonify({"error": "Failed to initialize Level 4 session"}), 500
+ 
+
+@app.route('/verify_l4_q1_voice', methods=['POST'])
+def verify_l4_q1_voice():
+    """
+    Receives spoken audio payloads, transcribes the string using WhisperX, 
+    and applies Jaro-Winkler phonetic token evaluation against the active target key.
+    """
+    if 'audio' not in request.files or 'target_sentence' not in request.form:
+        return jsonify({"error": "Missing audio or target_sentence payload"}), 400
+        
+    user_id = request.form.get('user_id')
+    target_sentence = request.form['target_sentence'].lower().strip()
+    target_word = request.form.get('target_word', 'bat').lower().strip()
+    question_number = request.form.get('question_number', '1')
+    
+    file = request.files['audio']
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        audio = whisperx.load_audio(filepath)
+        # Lock transcription strictly to English to prevent short-audio hallucinations
+        result = model.transcribe(audio, batch_size=8, language="en") 
+        os.remove(filepath)
+        
+        raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
+        clean_transcribed = re.sub(r'[^\w\s]', '', raw_text)
+        
+        print("\n" + "="*50)
+        print(f"(DEBUG WHISPERX) Target Key     : '{target_word}'")
+        print(f"(DEBUG WHISPERX) Mined Sentence : '{target_sentence}'")
+        print(f"(DEBUG WHISPERX) Spoken Audio   : '{clean_transcribed}'")
+        print("="*50 + "\n")
+        
+        # --- PHONETIC TOKEN EVALUATION ---
+        transcribed_tokens = clean_transcribed.split()
+        best_token_score = 0.0
+        matched_token = ""
+        
+        # Jaro-Winkler handles slight mispronunciations or accent shifts gracefully
+        for token in transcribed_tokens:
+            score = jellyfish.jaro_winkler_similarity(target_word, token)
+            if score > best_token_score:
+                best_token_score = score
+                matched_token = token
+                
+        # 0.80 threshold allows passing scores for structurally valid phonetic variations
+        print(f"Similarity sentence for {target_word} is {best_token_score}")
+        is_correct = bool(best_token_score >= 0.65)
+        
+        # Instantly update local database progression maps
+        _, mastery = update_therapy_progress_l4(user_id, target_word, is_correct, question_number)
+            
+        return jsonify({
+            "status": "success",
+            "target_sentence": target_sentence,
+            "transcribed_sentence": clean_transcribed,
+            "target_word": target_word,
+            "matched_token": matched_token,
+            "similarity_score": best_token_score,
+            "correct": is_correct,
+            "mastery_status": mastery
+        }), 200
+        
+    except Exception as e:
+        print(f"(CRITICAL ERROR) /verify_l4_q1_voice failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# --- LEVEL 4 DYNAMIC WRITING VERIFICATION ROUTE (AUTOMATIC CAPS NORMALIZATION) ---
+@app.route('/verify_l4_q2_writing', methods=['POST'])
+def verify_l4_q2_writing():
+    user_id = request.form.get('user_id')
+    target_sentence = request.form.get('target_sentence', '').lower().strip()
+    target_word = request.form.get('target_word', 'bat').lower().strip()
+    question_number = request.form.get('question_number', '17')
+    
+    if not target_sentence:
+        return jsonify({"error": "Missing target_sentence payload"}), 400
+        
+    uploaded_files = request.files.getlist("images")
+            
+    print(f"\n(DEBUG L4 WRITING) User: {user_id} | Target Sentence: '{target_sentence}' | Active Word: '{target_word}' | Char Streams: {len(uploaded_files)}")
+
+    if not uploaded_files:
+        return jsonify({"error": "No drawing payloads extracted from field 'images'"}), 400
+
+    try:
+        expected_chars = [c for c in target_sentence if c.isalnum()]
+        assembled_chars = []
+        
+        for i, file_storage in enumerate(uploaded_files):
+            if i >= len(expected_chars):
+                break
+                
+            expected_char = expected_chars[i]
+            img = Image.open(file_storage.stream).convert("RGB")
+            
+            if expected_char.lower() in ['a', 'i', 'g', 'r', 'w']:
+                pred_response = g_handler_letter(img)
+            else:
+                pred_response = letter_predict(img)
+                
+            model_predict = ""
+            if isinstance(pred_response, dict) and 'prediction' in pred_response:
+                for x in pred_response['prediction']:
+                    if isinstance(x, str):
+                        model_predict = x
+            else:
+                model_predict = str(pred_response)
+                
+            # ---> CRITICAL FIX: Global Label Normalization for AI Classifiers <---
+            # Automatically strip off any structural "_caps" suffixes to isolate the pure base letter
+            # Maps labels like "C_caps" directly to "c", entirely preventing broken string mashes.
+            if model_predict.lower().endswith("_caps"):
+                model_predict = model_predict.split("_")[0]
+
+            clean_pred = model_predict.lower()
+            clean_exp = expected_char.lower()
+            
+            # Legacy mapping checks retained for numbers and strict visual discrepancies
+            if clean_pred != clean_exp:
+                if ((clean_exp == 'o' and clean_pred == '0') or 
+                    (clean_exp == 's' and clean_pred == '5') or 
+                    (clean_exp == 'g' and clean_pred == '9')):
+                    clean_pred = clean_exp 
+                    
+            assembled_chars.append(clean_pred if clean_pred else "?")
+            print(f"  -> Slot {i}: Expected '{expected_char}' vs Raw AI '{model_predict}' -> Mapped '{clean_pred}'")
+
+        raw_recognized_text = "".join(assembled_chars)
+        clean_recognized = re.sub(r'[^\w\s]', '', raw_recognized_text)
+        
+        print("\n" + "="*50)
+        print(f"(DEBUG L4 OCR) Target Word Key : '{target_word}'")
+        print(f"(DEBUG L4 OCR) Full String Heard : '{clean_recognized}'")
+        print("="*50 + "\n")
+        
+        best_token_score = 0.0
+        matched_token = ""
+        
+        transcribed_tokens = clean_recognized.split() if " " in clean_recognized else [clean_recognized]
+        
+        for token in transcribed_tokens:
+            score = jellyfish.jaro_winkler_similarity(target_word, token)
+            if score > best_token_score:
+                best_token_score = score
+                matched_token = token
+        print(f"Similarity sentence for {target_word} is {best_token_score}")      
+        is_correct = bool(best_token_score >= 0.65)
+        
+        _, mastery = update_therapy_progress_l4(user_id, target_word, is_correct, question_number)
+        
+    
+        return jsonify({
+            "status": "success",
+            "target_sentence": target_sentence,
+            "transcribed_sentence": clean_recognized,
+            "target_word": target_word,
+            "matched_token": matched_token,
+            "similarity_score": best_token_score,
+            "correct": is_correct,
+            "mastery_status": mastery
+        }), 200
+
+    except Exception as e:
+        print(f"(CRITICAL ERROR) /verify_l4_q2_writing execution failed: {str(e)}")
+        return jsonify({"error": f"Internal execution failure: {str(e)}"}), 500
+
+
+# --- LEVEL 4 ISOLATED VERIFICATION ENDPOINT (GRID VALIDATION) ---
+@app.route('/verify_l4_q3_grid', methods=['POST'])
+def verify_l4_q3_grid():
+    user_id = request.form.get('user_id')
+    target_sentence = request.form.get('target_sentence', '').lower().strip()
+    target_word = request.form.get('target_word', 'bat').lower().strip()
+    question_number = request.form.get('question_number', '18')
+    raw_answers_json = request.form.get('answers_list', '[]')
+    
+    if not target_sentence:
+        return jsonify({"error": "Missing target_sentence payload"}), 400
+        
+    try:
+        # Parse submitted token answers securely
+        selected_answers = json.loads(raw_answers_json)
+        clean_answers = [re.sub(r'[^\w\s]', '', str(w)).strip().lower() for w in selected_answers if str(w).strip()]
+        
+        print("\n" + "="*50)
+        print(f"(DEBUG L4 GRID) Target Word Key : '{target_word}'")
+        print(f"(DEBUG L4 GRID) Selected Tokens : {clean_answers}")
+        print("="*50 + "\n")
+        
+        # --- INSTANT TOKEN EVALUATION ---
+        # 1. Count exactly how many times the target word appears in the sanitized grid pool
+        grid_pool_words = [w.strip().lower() for w in target_sentence.split()]
+        total_targets_in_grid = grid_pool_words.count(target_word)
+        
+        # 2. Track the user's correct vs. incorrect selection counts in real-time
+        correct_clicks = 0
+        incorrect_clicks = 0
+        
+        for answer_token in clean_answers:
+            if answer_token == target_word:
+                correct_clicks += 1
+            else:
+                incorrect_clicks += 1
+        
+        # 3. Complete Verification: True ONLY if the user highlighted ALL targets and ZERO distractors
+        is_correct = bool((correct_clicks == total_targets_in_grid) and (incorrect_clicks == 0))
+        
+        # Instantly notify your parallel dictionary database updater
+        _, mastery = update_therapy_progress_l4(user_id, target_word, is_correct, question_number)
+        
+
+        return jsonify({
+            "status": "success",
+            "target_sentence": target_sentence,
+            "selected_answers": clean_answers,
+            "target_word": target_word,
+            "correct": is_correct,
+            "mastery_status": mastery
+        }), 200
+
+    except Exception as e:
+        print(f"(CRITICAL ERROR) /verify_l4_q3_grid execution failed: {str(e)}")
+        return jsonify({"error": f"Internal execution failure: {str(e)}"}), 500
+
+
+
+
+
+
+#---LEVEL 2--------------------
+
+# CARTOON SELECTION
+@app.route("/select_cartoon", methods=["POST"])
+def select_cartoon():
+    user_id = request.form.get('user_id')
+    cartoon_name = request.form.get('cartoon_name')
+    
+    if user_id and cartoon_name:
+        print(f"\n(DEBUG) Cartoon Selection Received: User={user_id}, Cartoon={cartoon_name}\n")
+        
+        success = store_cartoon_selection(user_id, cartoon_name)
+        
+        if not success:
+            return "Database Error"
+    try: 
+        db = get_db()
+        level2_ref = db.collection('Assessment_Test') \
+                    .document(user_id) \
+                    .collection('Level_2')
+
+        docs = level2_ref.stream()
+
+        all_errors = []
+        for doc in docs:
+
+            doc_data = doc.to_dict()
+
+            if doc_data.get("Answer") == "Incorrect":
+
+                errors = doc_data.get("Error", [])
+
+                if isinstance(errors, list):
+                    all_errors.extend(errors)
+        letters = []
+
+        for word in all_errors:
+
+            clean_word = re.sub(r'[^a-zA-Z]', '', word)
+
+            for ch in clean_word:
+                letters.append(ch.lower())
+
+        # Remove duplicates
+        unique_letters = list(dict.fromkeys(letters))
+        level2_ref = db.collection('Level') \
+            .document(user_id) \
+            .collection('Level 2')
+
+        for letter in unique_letters:
+            level2_ref.document(letter).set({
+                "letter": letter,
+                "count": 0
+            })
+        print("User id: ", user_id)
+        print("User Errors: ", unique_letters)
+    
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+            
+    return "Error: Missing data"
+
+
+
+@app.route('/TherapyLevel2', methods=['POST'])
+def TherapyLevel2():
+    print("Backend reached!")
+    user_id = request.form.get('user_id')
+    print(f"User ID received: {user_id}")
+    if not user_id:
+        return jsonify({"error": "User ID missing"}), 400
+    
+    db = get_db()
+
+    level2_ref = db.collection('Level') \
+        .document(user_id) \
+        .collection('Level 2')
+
+    docs = level2_ref.stream()
+
+    letters_array = []
+
+    for doc in docs:
+        letters_array.append(doc.id)
+    
+    print (letters_array)
+    
+    return jsonify(letters_array)
+
+
+def decrement_therapylevel2_count(user_id,expected_Letter):
+    db = get_db()
+    letter_ref = db.collection('Level') \
+    .document(user_id) \
+    .collection('Level 2') \
+    .document(expected_Letter)
+
+    expected_doc = letter_ref.get()
+
+    if expected_doc.exists:
+
+        expected_data = expected_doc.to_dict()
+
+        current_count = expected_data.get("count", 0)
+
+        print(f"{expected_Letter} count:", current_count)
+
+        #Decrement the count if current_count is not 0
+        if current_count > 0:
+
+            letter_ref.update({
+            "count": 0
+            })
+
+            print(f"{expected_Letter} count decremented")
+
+def increment_therapylevel2_count(user_id,expected_Letter):
+    db = get_db()
+    letter_ref = db.collection('Level') \
+    .document(user_id) \
+    .collection('Level 2') \
+    .document(expected_Letter)
+
+    letter_ref.update({
+    "count": firestore.Increment(1)
+    })
+
+    print(f"Count incremented for {expected_Letter}")
+    updated_doc = letter_ref.get()
+
+    if updated_doc.exists:
+
+        updated_data = updated_doc.to_dict()
+        current_count = updated_data.get("count", 0)
+        print(f"{expected_Letter} count:", current_count)
+
+        # Delete document if count reaches 6
+        if current_count >= 6:
+            letter_ref.delete()
+
+            print(f"{expected_Letter} deleted from Level 2")
+
+
+
+@app.route("/predict_therapy_level2",methods=['POST'])
+def predict_therapy_level2():
+    user_id=request.form.get('user_id')
+    question_number=request.form.get('question_number')
+    expected_Letter=request.form.get('expected_Letter')
+    file = request.files["file"]
+    db = get_db()
+    if user_id:
+        print("The User(id): ",user_id)
+        print("The Question Number: ",question_number)
+        print("Expected Letter: ",expected_Letter)
+        img = Image.open(file.stream).convert("RGB")
+        if expected_Letter == 'q':
+            prediction=g_handler_letter(img)
+            if prediction not in ['q','Q']:
+
+                decrement_therapylevel2_count(user_id,expected_Letter)
+                print("Error q")
+            else:
+                increment_therapylevel2_count(user_id,expected_Letter)
+                print("Correct q")
+        else:
+            pred=letter_predict(img)
+            model_predict=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict= x
+            # print(model_predict)
+            if expected_Letter == 'p':
+                if model_predict not in ['p','P_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error p")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct p")
+            elif expected_Letter == 'b':
+                if model_predict not in ['b', 'B_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error b")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct b")
+            elif expected_Letter == 'd':
+                if model_predict not in ['d','D_caps']:
+                    decrement_therapylevel2_count(user_id,expected_Letter)
+                    
+                    print("Error d")
+                else:
+                    increment_therapylevel2_count(user_id,expected_Letter)
+                    print("Correct d")
+            else:
+                if expected_Letter in ['a','i','n','u','y']:
+                    prediction=g_handler_letter(img)
+                    if prediction != expected_Letter:
+                        decrement_therapylevel2_count(user_id,expected_Letter)
+                        print(f"Error {expected_Letter}")
+                    else:
+                        increment_therapylevel2_count(user_id,expected_Letter)
+                        print(f"Correct {expected_Letter}")
+                else :
+                    if expected_Letter == 'c':
+                        if model_predict not in ['c','C_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error c")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct c")
+                    elif expected_Letter == 'l':
+                        if model_predict not in ['l','L_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error l")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct l")
+                    elif expected_Letter == 'o':
+                        if model_predict not in ['o','O_caps',0]:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error o")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct o")
+                    elif expected_Letter == 's':
+                        if model_predict not in ['s','S_caps']:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            print("Error s")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+                            print("Correct s")
+                    else:
+               
+
+                        if model_predict != expected_Letter:
+                            decrement_therapylevel2_count(user_id,expected_Letter)
+                            
+                            print(f"Error {expected_Letter}")
+                        else:
+                            increment_therapylevel2_count(user_id,expected_Letter)
+
+                            print(f"Correct {expected_Letter}")
+
+
+
+
+
+
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001,threaded=True)
 
