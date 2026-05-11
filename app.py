@@ -653,7 +653,8 @@ def predict_handwriting_batch():
                 # We use .lower() to allow 'F' == 'f'
 
                 if model_predict.lower() != expected_char.lower():
-                    if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0)):
+                    if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0) or
+                        expected_char.lower()=='b' and (str(model_predict) =='B_caps')):
                         continue
                     # Record the error
                     else:
@@ -827,6 +828,11 @@ def check_answers_q18():
         print(f"Error: {e}")
         return str(e), 500
 #level 4 Question 17 and 19
+
+
+
+
+
 @app.route("/predict_handwriting_sentence", methods=['POST'])
 def predict_handwriting_sentence():
     user_id = request.form.get('user_id')
@@ -885,7 +891,8 @@ def predict_handwriting_sentence():
                             (expected_char=='T' and str(model_predict)=='T_caps') or 
                             (expected_char=='b' and str(model_predict)=='B_caps') or 
                             (expected_char=='H' and str(model_predict)=='H_caps') or
-                            (expected_char=='g' and str(model_predict)=='9')):
+                            (expected_char=='g' and str(model_predict)=='9')or
+                            (expected_char=='m' and str(model_predict)=='n')):
                             continue
                         # Record the error
                         else:
@@ -1126,7 +1133,16 @@ def get_user_scores(user_id):
 
         level2_empty = len(level2_docs) == 0
         print(level2_empty)
+        level2_therapy_ref = db.collection('Level') \
+        .document(user_id) \
+        .collection('Level 2')
 
+        level2_docs = list(level2_therapy_ref.stream())
+
+        level2_empty = len(level2_docs) == 0
+        print(level2_empty)
+
+        return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
         return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
 
     except Exception as e:
