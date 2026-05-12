@@ -3101,6 +3101,360 @@ def predict_handwriting_batch_therapy():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# =============================================================================
+# QUIZ 3 BACKEND ROUTES  —  paste into app.py replacing old versions
+#
+# FIXES vs original:
+#  1. Reads errors from Assessment_Test + Level_Schema (not 'Level' collection)
+#  2. /get_personalized_question_quiz3 uses q_num "1","2","3" matching Kotlin
+#  3. /submit_quiz_answer stores to Quiz → user_id → "Quiz 3" subcollection
+#  4. /api/scores now counts Quiz 3 completions so Levelselection can unlock Level 4
+# =============================================================================
+
+import traceback, random
+from flask import request, jsonify
+from config.firebase import get_db
+from firebase_admin import firestore
+
+
+# =============================================================================
+# GET /get_personalized_question_quiz3?user_id=...&question_number=1|2|3
+#
+# FIX 1: Added length filter (3-5 chars) when reading from Firestore sources
+#         so single-letter garbage words can never become the target.
+# FIX 2: question_number is now normalised to a string early, so "1"/"2"/"3"
+#         always match regardless of what the client sends.
+# =============================================================================
+@app.route('/get_personalized_question_quiz3', methods=['GET'])
+def get_personalized_question_quiz3():
+    user_id = request.args.get('user_id')
+    q_num   = str(request.args.get('question_number', '1')).strip()  # always a string
+
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    try:
+        db = get_db()
+        error_words = []
+
+        # ── Source 1: Level_Schema → Level_3 ─────────────────────────────────
+        # FIX: added  3 <= len(w) <= 5  guard so single-char Firestore values
+        #      never become the quiz target word.
+        try:
+            docs = (db.collection('Level')
+                      .document(user_id)
+                      .collection('Level_3')
+                      .stream())
+            for doc in docs:
+                for w in (doc.to_dict() or {}).get('Error', []):
+                    w = str(w).strip().lower()
+                    if w and 3 <= len(w) <= 5 and w not in error_words:
+                        error_words.append(w)
+        except Exception as e:
+            print(f"Level_Schema read error: {e}")
+
+        # ── Source 2: Assessment_Test → Level_3 (skip mastered) ──────────────
+        try:
+            docs = (db.collection('Assessment_Test')
+                      .document(user_id)
+                      .collection('Level_3')
+                      .stream())
+            for doc in docs:
+                data = doc.to_dict() or {}
+                if data.get('Mastered'):
+                    continue
+                for w in data.get('Error', []):
+                    w = str(w).strip().lower()
+                    if w and 3 <= len(w) <= 5 and w not in error_words:
+                        error_words.append(w)
+        except Exception as e:
+            print(f"Assessment_Test read error: {e}")
+
+        # ── Source 3: CSV fallback ────────────────────────────────────────────
+        if not error_words:
+            pool = [w for w in CSV_WORDS if 3 <= len(w) <= 5]
+            random.shuffle(pool)
+            error_words = pool[:10]
+
+        random.shuffle(error_words)
+        target_word = error_words[0] if error_words else "cat"
+
+        print(f"(QUIZ3 Q{q_num}) User={user_id} | Target='{target_word}'")
+
+        # ── Route by question type ────────────────────────────────────────────
+        if q_num == "1":
+            # MCQ — target word + 2 distractors
+            options = build_distractor_options_for_q11(target_word)
+            return jsonify({
+                "audio_url":   None,
+                "target_word": target_word,
+                "data": [{"target": target_word, "options": options}]
+            }), 200
+
+        elif q_num == "2":
+            # Read-aloud — flat list of similar words used as swipe cards
+            read_words = find_similar_words_from_csv(target_word, count=4)
+            return jsonify({
+                "audio_url":   None,
+                "target_word": target_word,
+                "data":        read_words       # flat list of strings
+            }), 200
+
+        elif q_num == "3":
+            # Rhyme grid — 12 shuffled words
+            rhyme_words = find_similar_words_from_csv(target_word, count=12)
+            random.shuffle(rhyme_words)
+            return jsonify({
+                "audio_url":   None,
+                "target_word": target_word,
+                "data":        rhyme_words      # flat list of 12 strings
+            }), 200
+
+        else:
+            return jsonify({"error": f"Invalid question_number '{q_num}'. Use 1, 2, or 3."}), 400
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# POST /submit_quiz_answer
+#
+# FIX: Replaced hardcoded total_questions=4 with a per-distinct-question-number
+#      count so the 75% threshold works correctly when Q2 submits multiple
+#      cards (one attempt per word in the read-aloud stack).
+#
+# Logic:
+#   • Every POST is stored as before (individual attempt document).
+#   • For the pass/fail score we look at the LATEST attempt per question
+#     number (1, 2, 3) — one result per question, not per card.
+#   • 3 questions total; pass = at least 2 correct (≥ 75 % rounds to this).
+# =============================================================================
+@app.route('/submit_quiz_answer', methods=['POST'])
+def submit_quiz_answer():
+    user_id    = request.form.get('user_id')
+    target     = request.form.get('target_word', '').strip().lower()
+    q_num_str  = request.form.get('question_number', '0')
+    is_correct = request.form.get('is_correct', 'false').lower() == 'true'
+
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    try:
+        db = get_db()
+        quiz_col_ref = (db.collection('Quiz')
+                          .document(user_id)
+                          .collection('Quiz 3'))
+
+        # 1. Store the individual attempt (unchanged)
+        quiz_col_ref.add({
+            "word":            target,
+            "question_number": int(q_num_str) if q_num_str.isdigit() else 0,
+            "is_correct":      is_correct,
+            "timestamp":       firestore.SERVER_TIMESTAMP
+        })
+
+        # 2. Calculate score: one result per distinct question number (1, 2, 3).
+        #    For each question we take the LATEST attempt's is_correct value.
+        #    This means Q2 multi-card submissions don't inflate the denominator.
+        all_docs = list(quiz_col_ref.stream())
+
+        # Build dict: {question_number -> latest is_correct}
+        # Sort by timestamp if available, otherwise keep last seen.
+        from collections import defaultdict
+        latest_per_q = {}   # {q_num_int: is_correct}
+
+        for doc in all_docs:
+            data = doc.to_dict() or {}
+            qn   = data.get('question_number', 0)
+            if qn not in (1, 2, 3):        # skip the score_summary doc & junk
+                continue
+            ts = data.get('timestamp')      # Firestore Timestamp or None
+
+            if qn not in latest_per_q:
+                latest_per_q[qn] = (ts, data.get('is_correct', False))
+            else:
+                prev_ts, _ = latest_per_q[qn]
+                # If both timestamps exist, keep the more recent one
+                if ts is not None and (prev_ts is None or ts > prev_ts):
+                    latest_per_q[qn] = (ts, data.get('is_correct', False))
+
+        total_questions  = 3   # Q1, Q2, Q3
+        correct_total    = sum(1 for (_, correct) in latest_per_q.values() if correct)
+        # 75% of 3 = 2.25 → need at least 2 correct to pass (floor)
+        reaches_75_percent = correct_total >= 2
+
+        # 3. Update score summary
+        quiz_col_ref.document('score_summary').set({
+            "total_correct":   correct_total,
+            "total_questions": total_questions,
+            "percentage":      round((correct_total / total_questions) * 100, 1),
+            "passed_75":       reaches_75_percent,
+            "last_updated":    firestore.SERVER_TIMESTAMP
+        }, merge=True)
+
+        # 4. Mark completion in Assessment_Test so Level 4 unlocks
+        if reaches_75_percent:
+            (db.collection('Assessment_Test')
+               .document(user_id)
+               .collection('Quiz_3')
+               .document('completion')
+               .set({
+                   'completed':  True,
+                   'score':      f"{correct_total}/{total_questions}",
+                   'flag_75':    True,
+                   'timestamp':  firestore.SERVER_TIMESTAMP
+               }, merge=True))
+
+        return jsonify({
+            "status":        "success",
+            "total_correct": correct_total,
+            "quiz3_passed":  reaches_75_percent
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# GET /api/scores/<user_id>   — Fully aligned with Compose dynamic unlock logic
+# =============================================================================
+@app.route("/api/scores/<user_id>", methods=['GET'])
+def get_user_score(user_id):
+    try:
+        db = get_db()
+
+        user_profile_doc = db.collection('users').document(user_id).get()
+        if not user_profile_doc.exists:
+            return jsonify({"status": "error", "message": "User profile not found."}), 404
+
+        user_data     = user_profile_doc.to_dict()
+        has_completed = user_data.get('hasCompletedAssessment', True)
+
+        if not has_completed:
+            return jsonify({
+                "status": "success", 
+                "assessment_unlocked_index": 0,
+                "Level2_Empty": True,
+                "data": []
+            }), 200
+
+        assessment_ref = db.collection('Assessment_Test').document(user_id)
+        scores_summary = []
+        assessment_scores = {}
+
+        level_totals = {
+            'Level_1': 5,
+            'Level_2': 5,
+            'Level_3': 5,
+            'Level_4': 4
+        }
+
+        # Track if Level 2 subcollection has any error documents at all
+        level2_is_empty = True
+
+        # ── 1. Calculate Base Assessment Scores ──────────────────────────────
+        for level_name, total_questions in level_totals.items():
+            collection_ref  = assessment_ref.collection(level_name)
+            docs = list(collection_ref.stream())
+            errors_made = len(docs)
+            
+            if level_name == 'Level_2' and errors_made > 0:
+                level2_is_empty = False
+
+            correct_answers = max(0, total_questions - errors_made)
+            assessment_scores[level_name] = correct_answers
+            
+            # Base payload item
+            item_data = {
+                "level": level_name,
+                "score": f"{correct_answers}/{total_questions}"
+            }
+
+            # ── Inject Level 1 meta_status (Quiz 1 Check) ──
+            if level_name == 'Level_1':
+                unlocked_lvl_2 = False
+                try:
+                    # Adjust path if Level_1 is stored as a document field instead of a subcollection doc
+                    lvl1_meta_doc = db.collection('Level').document(user_id).collection('Level_1').document('meta_status').get()
+                    if lvl1_meta_doc.exists:
+                        unlocked_lvl_2 = lvl1_meta_doc.to_dict().get('unlocked_level_2', False)
+                except Exception as e:
+                    print(f"Error fetching Level 1 meta_status: {e}")
+                
+                item_data["meta_status"] = {"unlocked_level_2": unlocked_lvl_2}
+
+            scores_summary.append(item_data)
+
+        # ── 2. Derive Baseline Assessment Index ──────────────────────────────
+        base_unlocked_index = 0
+        if assessment_scores.get('Level_1', 0) >= 3:
+            base_unlocked_index = 2  # Unlocks Level 2
+            if assessment_scores.get('Level_2', 0) >= 3:
+                base_unlocked_index = 4  # Unlocks Level 3
+                if assessment_scores.get('Level_3', 0) >= 3:
+                    base_unlocked_index = 6  # Unlocks Level 4
+
+       # ── 2. Fetch Quiz 2 Data ─────────────────────────────────────────────
+        quiz2_score = 0
+        try:
+            q2_doc = db.collection('Quiz').document(user_id).collection('Quiz_2').document('score_summary').get()
+            if q2_doc.exists:
+                quiz2_score = q2_doc.to_dict().get('score', 0)
+        except Exception:
+            pass
+        
+        scores_summary.append({
+            "level": "Quiz_2",
+            "score": f"{quiz2_score}/5"
+        })
+        # ── 3. Derive Baseline Assessment Index (Updated) ────────────────────
+        base_unlocked_index = 0
+        if assessment_scores.get('Level_1', 0) >= 3:
+            base_unlocked_index = 2  # Unlocks Level 2
+            
+            # Allow progression if EITHER Level 2 OR Quiz 2 is passed >= 3
+            if assessment_scores.get('Level_2', 0) >= 3 or quiz2_score >= 3:
+                base_unlocked_index = 4  # Unlocks Level 3
+                if assessment_scores.get('Level_3', 0) >= 3:
+                    base_unlocked_index = 6  # Unlocks Level 4
+
+        # ── 4. Quiz 3 completion (Passed 75% Check) ──────────────────────────
+        passed_75 = False
+        try:
+            # Pointing exactly to: Quiz -> [userid] -> Quiz 3 -> score_summary
+            quiz3_doc = db.collection('Quiz').document(user_id).collection('Quiz 3').document('score_summary').get()
+            if quiz3_doc.exists:
+                passed_75 = quiz3_doc.to_dict().get('passed_75', False)
+        except Exception as e:
+            print(f"Error fetching Quiz 3 summary: {e}")
+
+        scores_summary.append({
+            "level": "Quiz_3",
+            "score": f"{'1' if passed_75 else '0'}/1",
+            "score_summary": {
+                "passed_75": passed_75
+            }
+        })
+
+        # ── Final Payload Assembly ───────────────────────────────────────────
+        return jsonify({
+            "status": "success",
+            "assessment_unlocked_index": base_unlocked_index,
+            "Level2_Empty": level2_is_empty,
+            "data": scores_summary
+        }), 200
+
+    except Exception as e:
+        print(f"Flask API Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+#==============LEVEL SELECTION FLAG CHECK=====================================
+#=============================================================================
+
 
 
 if __name__ == "__main__":
