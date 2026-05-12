@@ -14,6 +14,7 @@ from firebase_admin import firestore
 from google.cloud.firestore_v1 import ArrayUnion
 from werkzeug.utils import secure_filename
 import traceback
+import string
 
 #IMPORTING FUNCTIONS FROM FOLDER
 from config.firebase import initialize_firebase
@@ -1125,6 +1126,21 @@ def get_user_scores(user_id):
                 "level": level_name,
                 "score": f"{correct_answers}/{total_questions}"
             })
+        quiz2_ref = db.collection('Quiz') \
+            .document(user_id) \
+            .collection('Quiz 2')
+
+        quiz2_docs = list(quiz2_ref.stream())
+
+        quiz2_total = 5  
+
+        quiz2_errors = len(quiz2_docs)
+        quiz2_correct = max(0, quiz2_total - quiz2_errors)
+        scores_summary.append({
+            "level": "Quiz_2",
+            "score": f"{quiz2_correct}/{quiz2_total}"
+        })
+
         level2_therapy_ref = db.collection('Level') \
         .document(user_id) \
         .collection('Level 2')
@@ -1142,7 +1158,6 @@ def get_user_scores(user_id):
         level2_empty = len(level2_docs) == 0
         print(level2_empty)
 
-        return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
         return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
 
     except Exception as e:
@@ -1170,31 +1185,44 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
 def generate_typecast_audio(text, filename):
-    """
-    Calls the Typecast Python SDK, saves the .wav file locally, 
-    and returns the local URL for the Kotlin app to stream.
-    """
+
     try:
-        # Request the audio from Typecast
+        # 1. Map lowercased abbreviations to their optimal spoken forms
+        direction_map = {
+            r'\bne\b': "North East",
+            r'\bnw\b': "North West",
+            r'\bse\b': "South East",
+            r'\bsw\b': "South West"
+        }
+
+        # 2. Apply regex substitutions strictly on independent boundaries (\b)
+        # re.IGNORECASE ensures matching against NE, Ne, ne, nE, etc.
+        spoken_text = text
+        for pattern, full_form in direction_map.items():
+            spoken_text = re.sub(pattern, full_form, spoken_text, flags=re.IGNORECASE)
+
+        print(f"(DEBUG) Original text: '{text}' -> Spoken text: '{spoken_text}'")
+
+        # 3. Request the expanded audio string from Typecast
         response = typecast_client.text_to_speech(TTSRequest(
-            text=text,
+            text=spoken_text,
             model="ssfm-v30", # Ensure this model matches your Typecast plan
             voice_id=CHARACTER_ID
         ))
 
-        # Save the audio file to our static/audio folder
+        # 4. Save the audio file to our static/audio folder
         filepath = os.path.join(AUDIO_DIR, filename)
         with open(filepath, 'wb') as f:
             f.write(response.audio_data)
 
-        # Build the URL that Android will use to download this file
+        # 5. Build the URL that Android will use to stream this file
         audio_url = f"http://{request.host}/static/audio/{filename}"
         print(f"(DEBUG) Audio generated successfully via API: {audio_url}")
         
         return audio_url
 
     except Exception as e:
-        print(f"(ERROR) Typecast SDK: {str(e)}")
+        print(f"(ERROR) Failed to generate Typecast audio: {e}")
         return None
 
 
@@ -1535,11 +1563,185 @@ def verify_therapy_q4():
         print(f"(ERROR) /verify_therapy_q4 failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error"}), 500
 
+#QUIZ1
+@app.route('/generate_quiz1', methods=['GET'])
+def generate_quiz1():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"error": "Missing user_id parameter"}), 400
+
+    try:
+        quiz_questions = []
+        
+        # Pre-cache single word audio execution parameters securely
+        cardinal_dirs = ["Up", "Down", "Left", "Right"]
+        combined_dirs = ["NE", "NW", "SE", "SW","Up","Down","Left","Right"]
+        
+        for direction in (cardinal_dirs + combined_dirs):
+            ensure_word_audio_exists(direction)
+
+        target_slots = [1, 2, 3, 4]
+        
+        # Shuffle independent option sets
+        random.shuffle(cardinal_dirs)
+        random.shuffle(combined_dirs)
+
+        for index, slot_num in enumerate(target_slots):
+            # Enforce strict assignment logic:
+            # Slot 1 (Drawing) consumes pure cardinal parameters to guarantee ML classification safety.
+            # Subsequent interactive UI configurations pull from the full spatial matrix.
+            if slot_num == 1:
+                target_word = cardinal_dirs[0] # Guaranteed Cardinal Root
+            elif slot_num==3:
+                # Rotates targets cleanly across the combined direction list
+                target_word = combined_dirs[index - 1] 
+                
+            clean_word = target_word.lower()
+
+            # Dynamic string formatting mapped per layout specifications
+            if slot_num == 1:
+                q_type = "DRAWING"
+                instruction_text = f"Draw the arrow {target_word}"
+                audio_filename = f"cached_quiz_draw_{clean_word}.wav"
+            elif slot_num == 2:
+                q_type = "MCQ"
+                instruction_text = f"Click the {target_word} Arrow"
+                audio_filename = f"cached_quiz_click_{clean_word}.wav"
+            elif slot_num == 3:
+                q_type = "MCQ"
+                # Stage 3 uses the rotated icon display, prompting standard conceptual extraction
+                instruction_text = "Click the direction of the given arrow"
+                audio_filename = f"cached_identify_v2_down.wav"
+            else: # Slot 4
+                q_type = "MCQ"
+                instruction_text = "Match the arrow to the correct word"
+                audio_filename = f"cached_match_v2_left.wav"
+
+            audio_url = get_or_generate_audio(instruction_text, audio_filename)
+
+            quiz_questions.append({
+                "db_question_number": slot_num,  
+                "question_type": q_type,
+                "ui_slot_assigned": slot_num,
+                "target_word": target_word,
+                "instruction_text": instruction_text,
+                "audio_url": audio_url
+            })
+
+        return jsonify({
+            "status": "success",
+            "total_questions": len(quiz_questions),
+            "quiz_mode": True,
+            "questions": quiz_questions
+        }), 200
+
+    except Exception as e:
+        print(f"(ERROR) /generate_quiz1 failed runtime compilation:\n{traceback.format_exc()}")
+        return jsonify({"error": "Failed to compile randomized testing parameters"}), 500
 
 
 
+@app.route('/evaluate_quiz1_batch', methods=['POST'])
+def evaluate_quiz1_batch():
+    try:
+        user_id = request.form.get('user_id')
+        metadata_str = request.form.get('metadata')
 
+        if not user_id or not metadata_str:
+            return jsonify({"error": "Missing payload routing configurations"}), 400
 
+        db = get_db()
+        metadata_list = json.loads(metadata_str)
+        
+        total_questions = len(metadata_list)
+        correct_count = 0
+        failed_concepts = []
+
+        # Iterate over submitted sequence entries
+        for meta in metadata_list:
+            q_index = meta['question_index']
+            target_word = meta['target_word']
+            q_type = meta['question_type']
+            db_slot = meta['db_question_number']
+
+            is_correct = False
+
+            if q_type == "DRAWING":
+                file_key = f"file_{q_index}"
+                if file_key in request.files:
+                    image_file = request.files[file_key]
+                    
+                    # ---> FIXED: Safely open byte stream into Pillow RGB Image matching standard routes <---
+                    img = Image.open(image_file.stream).convert("RGB")
+                    
+                    # Execute active computer vision direction validation
+                    prediction = direction_predict(img) 
+                    if prediction.strip().lower() == target_word.strip().lower():
+                        is_correct = True
+            elif q_type == "MCQ":
+                file_key = f"file_{q_index}"
+                if file_key in request.files:
+                    # Reads the transmitted selection string payload directly from the file buffer
+                    selection_bytes = request.files[file_key].read()
+                    selected_arrow = selection_bytes.decode('utf-8').strip()
+                    
+                    # Compares decoded user click straight against absolute DB concepts
+                    if selected_arrow.lower() == target_word.strip().lower():
+                        is_correct = True
+            else:
+                # Fallback validation logic for supplementary question formats (MCQ, Matching)
+                is_correct = True
+
+            if is_correct:
+                correct_count += 1
+            else:
+                failed_concepts.append({
+                    "slot": db_slot,
+                    "concept": target_word.strip().capitalize()
+                })
+
+        # Calculate final percentage distribution
+        score_ratio = (correct_count / total_questions) * 100 if total_questions > 0 else 0
+        is_eligible_for_level_2 = score_ratio >= 75.0  # Pass threshold mapping set to 75%
+
+        # 1. WRITE TO QUIZ TRACKING TABLE
+        quiz_ref = db.collection('Quiz').document(user_id).collection('Quiz 1').document('Score')
+        quiz_ref.set({
+            'score': correct_count,
+            'total_questions': total_questions,
+            'percentage': score_ratio,
+            'passed': is_eligible_for_level_2,
+            'timestamp': firestore.SERVER_TIMESTAMP
+        }, merge=True)
+
+        # 2. WRITE TO LEVEL 2 ACCESS PERMISSION NODE
+        meta_ref = db.collection('Level').document(user_id).collection('Level_1').document('meta_status')
+        meta_ref.set({
+            'unlocked_level_2': is_eligible_for_level_2
+        }, merge=True)
+
+        # 3. WRITE IDENTIFIED ERRORS BACK TO LEVEL 1 PRACTICE POOLS
+        for err_item in failed_concepts:
+            slot_id = str(err_item['slot'])
+            active_practice_ref = db.collection('Level').document(user_id).collection('Level_1').document(slot_id)
+            
+            # Reset success counters to trigger priority spatial retraining
+            active_practice_ref.set({
+                'Question Number': err_item['slot'],
+                'Error': [err_item['concept']],
+                'success_count': 0  
+            }, merge=True)
+
+        return jsonify({
+            "status": "success",
+            "final_score": correct_count,
+            "passed": is_eligible_for_level_2,
+            "errors_logged": len(failed_concepts)
+        }), 200
+
+    except Exception as e:
+        print(f"(CRITICAL) Batch processing faulted:\n{traceback.format_exc()}")
+        return jsonify({"error": "Failed to compile evaluations batch"}), 500
 
 
 
@@ -2088,7 +2290,23 @@ def select_cartoon():
             })
         print("User id: ", user_id)
         print("User Errors: ", unique_letters)
-    
+        random_letters = random.sample(unique_letters, min(3, len(unique_letters)))
+        # All lowercase alphabets
+        all_letters = list(string.ascii_lowercase)
+
+        # Find letters NOT already in random_letters
+        remaining_letters = [ch for ch in all_letters if ch not in random_letters]
+        extra_letters = random.sample(remaining_letters, 2)
+        random_letters.extend(extra_letters)
+        level2_ref = db.collection('Quiz') \
+            .document(user_id) \
+            .collection('Quiz 2')
+        for letter in random_letters:
+            level2_ref.document(letter).set({
+                "letter": letter
+            })
+        
+
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2278,6 +2496,147 @@ def predict_therapy_level2():
                             increment_therapylevel2_count(user_id,expected_Letter)
 
                             print(f"Correct {expected_Letter}")
+
+
+
+@app.route('/Quiz2Questions', methods=['POST'])
+def Quiz2Questions():
+    print("Backend reached!")
+    user_id = request.form.get('user_id')
+    print(f"User ID received: {user_id}")
+    if not user_id:
+        return jsonify({"error": "User ID missing"}), 400
+    
+    db = get_db()
+
+    level2_ref = db.collection('Quiz') \
+        .document(user_id) \
+        .collection('Quiz 2')
+
+    docs = level2_ref.stream()
+
+    letters_array = []
+
+    for doc in docs:
+        letters_array.append(doc.id)
+    
+    print (letters_array)
+    
+    return jsonify(letters_array)
+
+
+
+
+def delete_quiz2_document(user_id,expected_Letter):
+    db = get_db()
+    letter_ref = db.collection('Quiz') \
+    .document(user_id) \
+    .collection('Quiz 2') \
+    .document(expected_Letter)
+    updated_doc = letter_ref.get()
+    print("Document exists:", updated_doc.exists)
+
+    if updated_doc.exists:
+        letter_ref.delete()
+        print(f"Document deleted from Quiz 2 of letter {expected_Letter}")
+
+
+
+#Quiz#2
+@app.route("/predict_quiz2",methods=['POST'])
+def predict_quiz2():
+    user_id=request.form.get('user_id')
+    question_number=request.form.get('question_number')
+    expected_Letter=request.form.get('expected_Letter')
+    file = request.files["file"]
+    db = get_db()
+    if user_id:
+        print("The User(id): ",user_id)
+        print("The Question Number: ",question_number)
+        print("Expected Letter: ",expected_Letter)
+        img = Image.open(file.stream).convert("RGB")
+        if expected_Letter == 'q':
+            prediction=g_handler_letter(img)
+            if prediction not in ['q','Q']:
+
+                print("Error q")
+            else:
+                delete_quiz2_document(user_id,expected_Letter)
+                print("Correct q")
+        else:
+            pred=letter_predict(img)
+            model_predict=""
+            for x in pred['prediction']:
+                if isinstance(x, str):
+                    model_predict= x
+            # print(model_predict)
+            if expected_Letter == 'p':
+                if model_predict not in ['p','P_caps']:
+                    
+                    print("Error p")
+                else:
+                    delete_quiz2_document(user_id,expected_Letter)
+                    print("Correct p")
+            elif expected_Letter == 'b':
+                if model_predict not in ['b', 'B_caps']:
+                    
+                    print("Error b")
+                else:
+                    delete_quiz2_document(user_id,expected_Letter)
+                    print("Correct b")
+            elif expected_Letter == 'd':
+                if model_predict not in ['d','D_caps']:
+                    
+                    print("Error d")
+                else:
+                    delete_quiz2_document(user_id,expected_Letter)
+                    print("Correct d")
+            else:
+                if expected_Letter in ['a','i','n','u','y']:
+                    prediction=g_handler_letter(img)
+                    if prediction != expected_Letter:
+                        print(f"Error {expected_Letter}")
+                    else:
+                        delete_quiz2_document(user_id,expected_Letter)
+                        print(f"Correct {expected_Letter}")
+                else :
+                    if expected_Letter == 'c':
+                        if model_predict not in ['c','C_caps']:
+                            print("Error c")
+                        else:
+                            delete_quiz2_document(user_id,expected_Letter)
+                            print("Correct c")
+                    elif expected_Letter == 'l':
+                        if model_predict not in ['l','L_caps']:
+                            print("Error l")
+                        else:
+                            delete_quiz2_document(user_id,expected_Letter)
+                            print("Correct l")
+                    elif expected_Letter == 'o':
+                        if model_predict not in ['o','O_caps',0]:
+                            print("Error o")
+                        else:
+                            delete_quiz2_document(user_id,expected_Letter)
+                            print("Correct o")
+                    elif expected_Letter == 's':
+                        if model_predict not in ['s','S_caps']:
+                            print("Error s")
+                        else:
+                            delete_quiz2_document(user_id,expected_Letter)
+                            print("Correct s")
+                    else:
+               
+
+                        if model_predict != expected_Letter:
+                            
+                            print(f"Error {expected_Letter}")
+                        else:
+                            delete_quiz2_document(user_id,expected_Letter)
+
+                            print(f"Correct {expected_Letter}")
+
+
+
 
 
 
