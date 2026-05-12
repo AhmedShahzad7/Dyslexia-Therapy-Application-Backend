@@ -12,12 +12,8 @@ def store_direction_error(user_id, direction_predicted, question_number):
     q_str = str(question_number) 
     
     # --- UPDATED DYNAMIC LOGIC FOR QUESTION 1 ---
-    if q_str == "1":
-        # In app.py, we evaluate correct/incorrect before calling this function.
-        # We pass the 'target_word' directly into the 'direction_predicted' parameter.
-        # So we just store whatever word they failed!
-        error_key = direction_predicted.capitalize()
-
+    if q_str == "1"and direction_predicted != "Up":
+        error_key = "Up"
     # --- OLD STATIC LOGIC FOR OTHER QUESTIONS ---
     elif q_str == "2" and direction_predicted != "Left":
         error_key = "Left"
