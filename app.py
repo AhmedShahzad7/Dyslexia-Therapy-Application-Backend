@@ -1036,133 +1036,163 @@ def transcribe_and_score1():
         print(f"General Audio Route Error: {e}")
         return jsonify({"error": str(e)}), 500
     
-
-#common error 
-
+    
 @app.route("/get_common_errors/<user_id>", methods=['GET'])
 def get_common_errors(user_id):
     try:
         db = get_db()
-        all_errors = []
-        # List of all levels you are currently tracking in your backend
+        analytics_payload = []
+        
+        # Define the dynamic mapping structure across all active scopes
+        # Format: (Firestore Top-Level Collection, UI Source Category Name)
+        collection_scopes = [
+            ('Assessment_Test', 'Initial Assessment'),
+            ('Level', 'Therapy Practice'),
+            ('Quiz', 'Active Quizzes')
+        ]
+        
         levels = ["Level_1", "Level_2", "Level_3", "Level_4"]
 
-        for level in levels:
-            # Query the sub-collection for documents where the student made a mistake
-            docs = db.collection('Assessment_Test').document(user_id).collection(level).where("Answer", "==", "Incorrect").stream()
-            
-            for doc in docs:
-                data = doc.to_dict()
-                # Get the 'Error' field (which you store as ArrayUnion in other routes)
-                errors = data.get('Error', [])
+        # 1. Iterate through distinct learning modes
+        for db_collection, ui_category in collection_scopes:
+            for level_name in levels:
+                # Target collection path: Scope -> User -> Level Subcollection
+                sub_ref = db.collection(db_collection).document(user_id).collection(level_name)
                 
-                # Format the error detail: Join list items or use string directly
-                if isinstance(errors, list):
-                    error_detail = ", ".join(map(str, errors))
+                # Fetch documents where the child struggled
+                # Note: Adjust the .where() clause if practice nodes track failures differently (e.g., success_count == 0)
+                if db_collection == 'Assessment_Test':
+                    docs = sub_ref.where("Answer", "==", "Incorrect").stream()
                 else:
-                    error_detail = str(errors)
-                
-                # Add to the list we send to the mobile app
-                all_errors.append({
-                    "level": f"{level}: Question {data.get('Question Number', 'N/A')}",
-                    "detail": error_detail if error_detail else "General Error"
-                })
+                    # Generic stream for active practice levels tracking lingering errors
+                    docs = sub_ref.stream()
 
-        # If no errors found, return an empty list instead of a 404
-        return jsonify(all_errors), 200
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    
+                    # Safely extract stored ArrayUnion error parameters
+                    raw_errors = data.get('Error', [])
+                    if not isinstance(raw_errors, list):
+                        raw_errors = [str(raw_errors)] if raw_errors else []
+                        
+                    # Filter out empty records or system flags
+                    clean_concepts = [str(e).strip() for e in raw_errors if str(e).strip()]
+                    
+                    # Skip rendering if this specific node has been entirely mastered/cleared
+                    if not clean_concepts:
+                        continue
+
+                    # Construct readable layout titles mapping educational domain indicators
+                    q_num = data.get('Question Number', doc.id)
+                    domain_indicator = ""
+                    if level_name == "Level_1": domain_indicator = "Spatial Orientation"
+                    elif level_name == "Level_2": domain_indicator = "Letter Recognition"
+                    elif level_name == "Level_3": domain_indicator = "Phonetic rhyming"
+                    elif level_name == "Level_4": domain_indicator = "Sentence Context"
+
+                    level_title = f"{level_name.replace('_', ' ')}: {domain_indicator} (Q{q_num})"
+
+                    # Emit structural format perfectly aligned with GSON serializable parameters
+                    analytics_payload.append({
+                        "source_category": ui_category,
+                        "level_title": level_title,
+                        "error_concepts": clean_concepts
+                    })
+
+        return jsonify(analytics_payload), 200
 
     except Exception as e:
-        print(f"Error fetching common errors for {user_id}: {e}")
-        return jsonify({"error": str(e)}), 500
-    
+        print(f"(CRITICAL) Common Error sync faulted for {user_id}:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal analytics compilation engine failed"}), 500
 
-#Home Sceen Popup
-@app.route('/api/scores/<user_id>', methods=['GET'])
-def get_user_scores(user_id):
-    try:
-        db = get_db()
+
+# #Home Sceen Popup
+# @app.route('/api/scores/<user_id>', methods=['GET'])
+# def get_user_scores(user_id):
+#     try:
+#         db = get_db()
         
-        # --- CHECK IF ASSESSMENT IS COMPLETED ---
-        user_profile_ref = db.collection('users').document(user_id)
-        user_profile_doc = user_profile_ref.get()
+#         # --- CHECK IF ASSESSMENT IS COMPLETED ---
+#         user_profile_ref = db.collection('users').document(user_id)
+#         user_profile_doc = user_profile_ref.get()
         
-        if not user_profile_doc.exists:
-            return jsonify({"status": "error", "message": "User profile not found."}), 404
+#         if not user_profile_doc.exists:
+#             return jsonify({"status": "error", "message": "User profile not found."}), 404
             
-        user_data = user_profile_doc.to_dict()
-        has_completed = user_data.get('hasCompletedAssessment', True)
+#         user_data = user_profile_doc.to_dict()
+#         has_completed = user_data.get('hasCompletedAssessment', True)
         
-        # If  haven't finished, return an empty list 
-        if not has_completed:
-            return jsonify({"status": "success", "data": []}), 200
+#         # If  haven't finished, return an empty list 
+#         if not has_completed:
+#             return jsonify({"status": "success", "data": []}), 200
 
-        # ---  CALCULATE SCORES ---
-        assessment_ref = db.collection('Assessment_Test').document(user_id)
+#         # ---  CALCULATE SCORES ---
+#         assessment_ref = db.collection('Assessment_Test').document(user_id)
         
-        scores_summary = []
+#         scores_summary = []
 
         
-        level_totals = {
-            'Level_1': 5,
-            'Level_2': 5,
-            'Level_3': 5,
-            'Level_4': 4
-        }
+#         level_totals = {
+#             'Level_1': 5,
+#             'Level_2': 5,
+#             'Level_3': 5,
+#             'Level_4': 4
+#         }
 
-        # Loop through every expected level
-        for level_name, total_questions in level_totals.items():
+#         # Loop through every expected level
+#         for level_name, total_questions in level_totals.items():
             
        
-            collection_ref = assessment_ref.collection(level_name)
+#             collection_ref = assessment_ref.collection(level_name)
             
-            # Count the number of error documents
+#             # Count the number of error documents
             
-            errors_made = len(list(collection_ref.stream()))
+#             errors_made = len(list(collection_ref.stream()))
             
-            # Calculate correct answers
-            correct_answers = max(0, total_questions - errors_made)
+#             # Calculate correct answers
+#             correct_answers = max(0, total_questions - errors_made)
             
-            scores_summary.append({
-                "level": level_name,
-                "score": f"{correct_answers}/{total_questions}"
-            })
-        quiz2_ref = db.collection('Quiz') \
-            .document(user_id) \
-            .collection('Quiz 2')
+#             scores_summary.append({
+#                 "level": level_name,
+#                 "score": f"{correct_answers}/{total_questions}"
+#             })
+#         quiz2_ref = db.collection('Quiz') \
+#             .document(user_id) \
+#             .collection('Quiz 2')
 
-        quiz2_docs = list(quiz2_ref.stream())
+#         quiz2_docs = list(quiz2_ref.stream())
 
-        quiz2_total = 5  
+#         quiz2_total = 5  
 
-        quiz2_errors = len(quiz2_docs)
-        quiz2_correct = max(0, quiz2_total - quiz2_errors)
-        scores_summary.append({
-            "level": "Quiz_2",
-            "score": f"{quiz2_correct}/{quiz2_total}"
-        })
+#         quiz2_errors = len(quiz2_docs)
+#         quiz2_correct = max(0, quiz2_total - quiz2_errors)
+#         scores_summary.append({
+#             "level": "Quiz_2",
+#             "score": f"{quiz2_correct}/{quiz2_total}"
+#         })
 
-        level2_therapy_ref = db.collection('Level') \
-        .document(user_id) \
-        .collection('Level 2')
+#         level2_therapy_ref = db.collection('Level') \
+#         .document(user_id) \
+#         .collection('Level 2')
 
-        level2_docs = list(level2_therapy_ref.stream())
+#         level2_docs = list(level2_therapy_ref.stream())
 
-        level2_empty = len(level2_docs) == 0
-        print(level2_empty)
-        level2_therapy_ref = db.collection('Level') \
-        .document(user_id) \
-        .collection('Level 2')
+#         level2_empty = len(level2_docs) == 0
+#         print(level2_empty)
+#         level2_therapy_ref = db.collection('Level') \
+#         .document(user_id) \
+#         .collection('Level 2')
 
-        level2_docs = list(level2_therapy_ref.stream())
+#         level2_docs = list(level2_therapy_ref.stream())
 
-        level2_empty = len(level2_docs) == 0
-        print(level2_empty)
+#         level2_empty = len(level2_docs) == 0
+#         print(level2_empty)
 
-        return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
+#         return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
 
-    except Exception as e:
-        print(f"Flask API Error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+#     except Exception as e:
+#         print(f"Flask API Error: {e}")
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 
@@ -1251,7 +1281,6 @@ SLOT_CONFIGS = {
 
 
 
-
 @app.route('/init_level_session', methods=['GET'])
 def init_level_session():
     user_id = request.args.get('user_id')
@@ -1261,19 +1290,87 @@ def init_level_session():
     try:
         db = get_db()
         session_questions = []
-        MASTERY_THRESHOLD = 5 
+        MASTERY_THRESHOLD = 3 
 
         # Pre-cache single word audio for Q4 speaker interactions securely
         for direction in ["Up", "Down", "Left", "Right"]:
             ensure_word_audio_exists(direction)
 
-        # 1. CHECK GRADUATION STATUS
+        # Unified document reference handling Level 1 progression state parameters
         meta_ref = db.collection('Level').document(user_id).collection('Level_1').document('meta_status')
         meta_doc = meta_ref.get()
-        is_graduated = meta_doc.to_dict().get('graduated', False) if meta_doc.exists else False
+        meta_data = meta_doc.to_dict() or {}
+        
+        is_graduated = meta_data.get('graduated', False)
+        # CRITICAL FLAG: Tracks if baseline diagnostic records have already been injected into practice structures
+        has_imported_assessment = meta_data.get('Assessment_Imported', False)
 
-        # --- MAINTENANCE MODE ---
-        if is_graduated:
+        # 1. SCAN ACTIVE THERAPY TARGET POOL
+        active_error_pool = []
+        imported_any_new = False
+        
+        for q_num in range(1, 5): 
+            doc_id = str(q_num)
+            active_ref = db.collection('Level').document(user_id).collection('Level_1').document(doc_id)
+            active_doc = active_ref.get()
+            target_word = None
+
+            if active_doc.exists:
+                data = active_doc.to_dict() or {}
+                current_success = data.get('success_count', 0)
+                if current_success < MASTERY_THRESHOLD:
+                    target_word = data.get("Error", ["Up"])[0]
+            elif not has_imported_assessment:
+                # Fallback extraction strictly permitted ONLY during initial diagnostic handover execution
+                assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_1').document(doc_id)
+                assess_doc = assess_ref.get()
+                
+                if assess_doc.exists:
+                    assess_data = assess_doc.to_dict() or {}
+                    raw_errors = assess_data.get("Error", [])
+                    if assess_data.get("Answer") == "Incorrect" and raw_errors:
+                        target_word = raw_errors[0] if isinstance(raw_errors, list) else str(raw_errors)
+                        
+                        # Initialize tracking document directly inside active therapy pool
+                        active_ref.set({
+                            'Question Number': q_num,
+                            'Error': [target_word.strip().capitalize()],
+                            'success_count': 0,
+                        })
+                        imported_any_new = True
+
+            if target_word:
+                active_error_pool.append({
+                    "original_db_slot": q_num,
+                    "word": target_word.strip().capitalize()
+                })
+
+        # Lock out future diagnostic test injections once processing completes successfully
+        if imported_any_new:
+            meta_ref.set({'Assessment_Imported': True}, merge=True)
+            has_imported_assessment = True
+
+        # 2. GRADUATION EVALUATION LOGIC
+        # If the pool is empty (and baseline scan finished), execute graduation state routing cleanly
+        if not active_error_pool and not is_graduated:
+            # We explicitly write the lock flags to confirm absolute completion
+            meta_ref.set({
+                'graduated': True,
+                'unlocked_level_2': True,
+                'Assessment_Imported': True
+            }, merge=True)
+            
+            # Explicitly return empty task list to trigger smooth onSessionComplete routing on Android UI
+            return jsonify({
+                "status": "success",
+                "total_questions": 0,
+                "maintenance_mode": False,
+                "questions": []
+            }), 200
+
+        # 3. MAINTENANCE MODE GENERATOR
+        # Serves infinite continuous retention minigames once explicit graduation status is verified
+        if is_graduated and not active_error_pool:
             directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
             rand_dir = random.choice(directions)
             q_type = random.choice(["DRAWING", "MCQ_GRID", "MCQ_IDENTIFY", "MCQ_MATCH"])
@@ -1320,46 +1417,8 @@ def init_level_session():
                 }]
             }), 200
 
-        # --- STANDARD THERAPY MODE ---
-        active_error_pool = []
-
-        for q_num in range(1, 5): 
-            doc_id = str(q_num)
-            active_ref = db.collection('Level').document(user_id).collection('Level_1').document(doc_id)
-            active_doc = active_ref.get()
-            target_word = None
-
-            if active_doc.exists:
-                data = active_doc.to_dict()
-                current_success = data.get('success_count', 0)
-                if current_success < MASTERY_THRESHOLD:
-                    target_word = data.get("Error", ["Up"])[0]
-            else:
-                assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_1').document(doc_id)
-                assess_doc = assess_ref.get()
-                
-                if assess_doc.exists:
-                    assess_data = assess_doc.to_dict()
-                    if assess_data and "Error" in assess_data and isinstance(assess_data["Error"], list) and len(assess_data["Error"]) > 0:
-                        target_word = assess_data["Error"][0]
-                        active_ref.set({
-                            'Question Number': q_num,
-                            'Error': [target_word.capitalize()],
-                            'success_count': 0,
-                        })
-
-            if target_word:
-                active_error_pool.append({
-                    "original_db_slot": q_num,
-                    "word": target_word.strip().capitalize()
-                })
-
-        if len(active_error_pool) == 0:
-            meta_ref.set({'graduated': True})
-            return init_level_session()
-
+        # 4. STANDARD THERAPY MODE COMPILATION
         random.shuffle(active_error_pool)
-
         available_ui_slots = sorted(list(SLOT_CONFIGS.keys()))
         
         for index, error_obj in enumerate(active_error_pool):
@@ -1406,10 +1465,6 @@ def init_level_session():
     except Exception as e:
         print(f"(ERROR) /init_level_session failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to initialize therapy session"}), 500
-
-
-
-
 
 
 
@@ -1880,7 +1935,7 @@ def init_level4_session():
     try: 
         db = get_db()
         session_questions = []
-        MASTERY_THRESHOLD = 5 
+        MASTERY_THRESHOLD = 3 
 
         meta_ref = db.collection('Level').document(user_id).collection('Level_4').document('meta_status')
         meta_doc = meta_ref.get()
@@ -3319,141 +3374,247 @@ def submit_quiz_answer():
 
 
 # =============================================================================
-# GET /api/scores/<user_id>   — Fully aligned with Compose dynamic unlock logic
+# GET /api/scores/<user_id>   — Fully aligned with strict sequential gating logic
 # =============================================================================
 @app.route("/api/scores/<user_id>", methods=['GET'])
 def get_user_score(user_id):
     try:
         db = get_db()
 
+        # ── 1. USER PROFILE HANDSHAKE ──
         user_profile_doc = db.collection('users').document(user_id).get()
         if not user_profile_doc.exists:
             return jsonify({"status": "error", "message": "User profile not found."}), 404
 
-        user_data     = user_profile_doc.to_dict()
-        has_completed = user_data.get('hasCompletedAssessment', True)
+        user_data = user_profile_doc.to_dict() or {}
+        has_completed = user_data.get('hasCompletedAssessment', None)
+        if has_completed is None:
+            has_completed = user_data.get('hasCompleteAssesment', True)
 
         if not has_completed:
             return jsonify({
                 "status": "success", 
+                "hasCompletedAssessment": False,
                 "assessment_unlocked_index": 0,
                 "Level2_Empty": True,
                 "data": []
             }), 200
 
+        # ── 2. BASELINE DATA EXTRACTION ──
         assessment_ref = db.collection('Assessment_Test').document(user_id)
+        level_root_ref = db.collection('Level').document(user_id)
+        quiz_root_ref  = db.collection('Quiz').document(user_id)
+        
         scores_summary = []
-        assessment_scores = {}
-
-        level_totals = {
-            'Level_1': 5,
-            'Level_2': 5,
-            'Level_3': 5,
-            'Level_4': 4
-        }
-
-        # Track if Level 2 subcollection has any error documents at all
         level2_is_empty = True
 
-        # ── 1. Calculate Base Assessment Scores ──────────────────────────────
+        level_totals = {'Level_1': 5, 'Level_2': 5, 'Level_3': 5, 'Level_4': 4}
         for level_name, total_questions in level_totals.items():
-            collection_ref  = assessment_ref.collection(level_name)
-            docs = list(collection_ref.stream())
+            docs = list(assessment_ref.collection(level_name).stream())
             errors_made = len(docs)
-            
             if level_name == 'Level_2' and errors_made > 0:
                 level2_is_empty = False
 
-            correct_answers = max(0, total_questions - errors_made)
-            assessment_scores[level_name] = correct_answers
-            
-            # Base payload item
-            item_data = {
+            correct = max(0, total_questions - errors_made)
+            scores_summary.append({
                 "level": level_name,
-                "score": f"{correct_answers}/{total_questions}"
-            }
+                "score": f"{correct}/{total_questions}"
+            })
 
-            # ── Inject Level 1 meta_status (Quiz 1 Check) ──
-            if level_name == 'Level_1':
-                unlocked_lvl_2 = False
-                try:
-                    # Adjust path if Level_1 is stored as a document field instead of a subcollection doc
-                    lvl1_meta_doc = db.collection('Level').document(user_id).collection('Level_1').document('meta_status').get()
-                    if lvl1_meta_doc.exists:
-                        unlocked_lvl_2 = lvl1_meta_doc.to_dict().get('unlocked_level_2', False)
-                except Exception as e:
-                    print(f"Error fetching Level 1 meta_status: {e}")
-                
-                item_data["meta_status"] = {"unlocked_level_2": unlocked_lvl_2}
-
-            scores_summary.append(item_data)
-
-        # ── 2. Derive Baseline Assessment Index ──────────────────────────────
-        base_unlocked_index = 0
-        if assessment_scores.get('Level_1', 0) >= 3:
-            base_unlocked_index = 2  # Unlocks Level 2
-            if assessment_scores.get('Level_2', 0) >= 3:
-                base_unlocked_index = 4  # Unlocks Level 3
-                if assessment_scores.get('Level_3', 0) >= 3:
-                    base_unlocked_index = 6  # Unlocks Level 4
-
-       # ── 2. Fetch Quiz 2 Data ─────────────────────────────────────────────
-        quiz2_score = 0
-        try:
-            q2_doc = db.collection('Quiz').document(user_id).collection('Quiz_2').document('score_summary').get()
-            if q2_doc.exists:
-                quiz2_score = q2_doc.to_dict().get('score', 0)
-        except Exception:
-            pass
+        # ── 3. DYNAMIC STAGE STATE EVALUATION ──
         
+        # Stage 1: Level 1 Mastery
+        lvl1_graduated = False
+        l1_meta = level_root_ref.collection('Level_1').document('meta_status').get()
+        if l1_meta.exists:
+            m_data = l1_meta.to_dict() or {}
+            lvl1_graduated = m_data.get('graduated', False) or m_data.get('unlocked_level_2', False)
+
+        # Stage 2: Quiz 1 Passed
+        quiz1_passed = False
+        q1_doc = quiz_root_ref.collection('Quiz 1').document('Score').get()
+        if q1_doc.exists:
+            q1_data = q1_doc.to_dict() or {}
+            quiz1_passed = q1_data.get('passed', False) or (q1_data.get('percentage', 0) >= 75.0) or (q1_data.get('score', 0) >= 3)
+
+        # Stage 3: Level 2 Mastery (Checks both spaced and underscored collections)
+        lvl2_graduated = False
+        l2_meta = level_root_ref.collection('Level_2').document('meta_status').get()
+        if not l2_meta.exists:
+            l2_meta = level_root_ref.collection('Level 2').document('meta_status').get()
+            
+        if l2_meta.exists and l2_meta.to_dict().get('graduated', False):
+            lvl2_graduated = True
+        else:
+            # Dynamic fallback: If Quiz 1 passed, verify if active error targets have been depleted
+            l2_docs_spaced = list(level_root_ref.collection('Level 2').stream())
+            l2_docs_under  = list(level_root_ref.collection('Level_2').stream())
+            active_l2_targets = [d for d in (l2_docs_spaced + l2_docs_under) if d.id != 'meta_status']
+            
+            if quiz1_passed and len(active_l2_targets) == 0:
+                lvl2_graduated = True
+
+        # Stage 4: Quiz 2 Passed
+        quiz2_passed = False
+        q2_summary = quiz_root_ref.collection('Quiz 2').document('score_summary').get()
+        if q2_summary.exists:
+            q2_data = q2_summary.to_dict() or {}
+            quiz2_passed = q2_data.get('passed', False) or (q2_data.get('score', 0) >= 3)
+        elif lvl2_graduated:
+            # Verification endpoints delete active target documents inside Quiz 2 upon completion
+            q2_docs = list(quiz_root_ref.collection('Quiz 2').stream())
+            active_q2_targets = [d for d in q2_docs if d.id != 'score_summary']
+            if len(active_q2_targets) == 0:
+                quiz2_passed = True
+            
         scores_summary.append({
             "level": "Quiz_2",
-            "score": f"{quiz2_score}/5"
+            "score": f"{'1' if quiz2_passed else '0'}/1"
         })
-        # ── 3. Derive Baseline Assessment Index (Updated) ────────────────────
-        base_unlocked_index = 0
-        if assessment_scores.get('Level_1', 0) >= 3:
-            base_unlocked_index = 2  # Unlocks Level 2
+
+        # Stage 5: Level 3 Mastery
+        lvl3_graduated = False
+        l3_meta = level_root_ref.collection('Level_3').document('meta_status').get()
+        if l3_meta.exists and l3_meta.to_dict().get('graduated', False):
+            lvl3_graduated = True
+        else:
+            # Dynamic fallback: Level 3 documents get deleted upon completion
+            l3_docs = list(level_root_ref.collection('Level_3').stream())
+            active_l3_targets = [d for d in l3_docs if d.id != 'meta_status']
+            if quiz2_passed and len(active_l3_targets) == 0:
+                lvl3_graduated = True
+
+        # Stage 6: Quiz 3 Passed
+        quiz3_passed = False
+        q3_doc = quiz_root_ref.collection('Quiz 3').document('score_summary').get()
+        if q3_doc.exists:
+            q3_data = q3_doc.to_dict() or {}
+            quiz3_passed = q3_data.get('passed_75', False) or (q3_data.get('total_correct', 0) >= 2)
             
-            # Allow progression if EITHER Level 2 OR Quiz 2 is passed >= 3
-            if assessment_scores.get('Level_2', 0) >= 3 or quiz2_score >= 3:
-                base_unlocked_index = 4  # Unlocks Level 3
-                if assessment_scores.get('Level_3', 0) >= 3:
-                    base_unlocked_index = 6  # Unlocks Level 4
-
-        # ── 4. Quiz 3 completion (Passed 75% Check) ──────────────────────────
-        passed_75 = False
-        try:
-            # Pointing exactly to: Quiz -> [userid] -> Quiz 3 -> score_summary
-            quiz3_doc = db.collection('Quiz').document(user_id).collection('Quiz 3').document('score_summary').get()
-            if quiz3_doc.exists:
-                passed_75 = quiz3_doc.to_dict().get('passed_75', False)
-        except Exception as e:
-            print(f"Error fetching Quiz 3 summary: {e}")
-
         scores_summary.append({
             "level": "Quiz_3",
-            "score": f"{'1' if passed_75 else '0'}/1",
-            "score_summary": {
-                "passed_75": passed_75
-            }
+            "score": f"{'1' if quiz3_passed else '0'}/1",
+            "score_summary": {"passed_75": quiz3_passed}
         })
 
-        # ── Final Payload Assembly ───────────────────────────────────────────
+        # ── 4. STRICT SEQUENTIAL GATING ENGINE ──
+        current_max_index = 0
+
+        # Stage 1 Basics
+        if lvl1_graduated:
+            current_max_index = 1  # Unlocks Quiz 1
+
+        # Quiz 1 Pass -> Unlocks Level 2
+        if quiz1_passed:
+            if current_max_index < 2:
+                current_max_index = 2  
+            if lvl2_graduated:
+                if current_max_index < 3:
+                    current_max_index = 3  # Unlocks Quiz 2
+
+        # Override 1: Passing Quiz 2 independently unlocks Level 3
+        if quiz2_passed:
+            if current_max_index < 4:
+                current_max_index = 4  
+            if lvl3_graduated:
+                if current_max_index < 5:
+                    current_max_index = 5  # Unlocks Quiz 3
+
+        # Override 2: Passing Quiz 3 independently unlocks Level 4
+        if quiz3_passed:
+            if current_max_index < 6:
+                current_max_index = 6
         return jsonify({
             "status": "success",
-            "assessment_unlocked_index": base_unlocked_index,
+            "hasCompletedAssessment": True,
+            "assessment_unlocked_index": current_max_index,
             "Level2_Empty": level2_is_empty,
             "data": scores_summary
         }), 200
 
     except Exception as e:
-        print(f"Flask API Error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"Scores Gating API Error:\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": "Internal evaluation engine faulted"}), 500
+#=============== PROGRESS TRACKING ===========================================
+@app.route('/api/user_progress/<user_id>', methods=['GET'])
+def get_user_progress(user_id):
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
 
+    try:
+        db = get_db()
+        
+        # Define absolute project scopes
+        TOTAL_LEVELS = 4.0
+        TOTAL_QUIZZES = 3.0
+        
+        levels_attempted = 0
+        quizzes_attempted = 0
 
-#==============LEVEL SELECTION FLAG CHECK=====================================
-#=============================================================================
+        # --- 1. CHECK LEVEL ATTEMPTS ---
+        # Level 1 check
+        l1_doc = db.collection('Level').document(user_id).collection('Level_1').document('meta_status').get()
+        if l1_doc.exists or len(list(db.collection('Level').document(user_id).collection('Level_1').limit(1).stream())) > 0:
+            levels_attempted += 1
+
+        # Level 2 check
+        l2_docs = list(db.collection('Level').document(user_id).collection('Level 2').limit(1).stream())
+        if len(l2_docs) > 0:
+            levels_attempted += 1
+
+        # Level 3 check
+        l3_docs = list(db.collection('Level').document(user_id).collection('Level_3').limit(1).stream())
+        if len(l3_docs) > 0:
+            levels_attempted += 1
+
+        # Level 4 check
+        l4_doc = db.collection('Level').document(user_id).collection('Level_4').document('meta_status').get()
+        if l4_doc.exists or len(list(db.collection('Level').document(user_id).collection('Level_4').limit(1).stream())) > 0:
+            levels_attempted += 1
+
+        # --- 2. CHECK QUIZ ATTEMPTS ---
+        # Quiz 1 check
+        q1_doc = db.collection('Quiz').document(user_id).collection('Quiz 1').document('Score').get()
+        if q1_doc.exists:
+            quizzes_attempted += 1
+
+        # Quiz 2 check
+        q2_docs = list(db.collection('Quiz').document(user_id).collection('Quiz 2').limit(1).stream())
+        if len(q2_docs) > 0:
+            quizzes_attempted += 1
+
+        # Quiz 3 check
+        q3_docs = list(db.collection('Quiz').document(user_id).collection('Quiz 3').limit(1).stream())
+        if len(q3_docs) > 0:
+            quizzes_attempted += 1
+
+        # --- 3. CALCULATE METRICS ---
+        level_progress_float = levels_attempted / TOTAL_LEVELS
+        quiz_progress_float = quizzes_attempted / TOTAL_QUIZZES
+        
+        # Overall completion weights: Levels account for 60%, Quizzes 40%
+        overall_percentage = int(((level_progress_float * 0.6) + (quiz_progress_float * 0.4)) * 100)
+
+        return jsonify({
+            "status": "success",
+            "overall_progress_percentage": f"{overall_percentage}%",
+            "levels": {
+                "attempted": levels_attempted,
+                "total": int(TOTAL_LEVELS),
+                "progress_float": round(level_progress_float, 2),
+                "progress_text": f"{int(level_progress_float * 100)}%"
+            },
+            "quizzes": {
+                "attempted": quizzes_attempted,
+                "total": int(TOTAL_QUIZZES),
+                "progress_float": round(quiz_progress_float, 2),
+                "progress_text": f"{int(quiz_progress_float * 100)}%"
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"(CRITICAL) Progress API faulted:\n{traceback.format_exc()}")
+        return jsonify({"error": "Internal server error calculating progress"}), 500
 
 
 

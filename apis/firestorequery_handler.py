@@ -211,50 +211,51 @@ def store_voice_error1(user_id, targetname, error, question_number, detected_err
 #LEVEL 1 
 
 def update_therapy_progress(user_id, target_word, is_correct, question_number, level_name="Level_1"):
+    """
+    Core handler executing local validation updates across dynamic practice layers.
+    Instantly commits explicit graduation boundaries to database maps once pools reach depletion limits.
+    """
     db = get_db()
-    q_str = str(question_number)
-    MASTERY_THRESHOLD = 3
-
-    # Point directly to your main collection: Level -> userid -> Level_1 -> q_str
-    doc_ref = db.collection('Level') \
-                .document(user_id) \
-                .collection(level_name) \
-                .document(q_str)
-
-    doc = doc_ref.get()
+    active_doc_ref = db.collection('Level').document(user_id).collection(level_name).document(str(question_number))
+    meta_status_ref = db.collection('Level').document(user_id).collection(level_name).document('meta_status')
     
-    if not doc.exists:
-        # Failsafe initialization if something bypassed the GET route
-        doc_ref.set({
-            'Question Number': int(question_number),
-            'Error': [target_word.capitalize()],
-            'success_count': 0,
-        })
-        current_success = 0
-    else:
-        current_success = doc.to_dict().get('success_count', 0)
-
-    if is_correct:
-        new_success_count = current_success + 1
+    doc = active_doc_ref.get()
+    current_success = 0
+    
+    if doc.exists:
+        data = doc.to_dict() or {}
+        current_success = data.get('success_count', 0)
         
-        if new_success_count >= MASTERY_THRESHOLD:
-            # THE GRADUATION TRIGGER: Purge the document entirely
-            doc_ref.delete()
-            print(f"(SUCCESS) Mastery reached! Document Q{q_str} completely removed from 'Level' collection.")
-            return True, "mastered"
+    if is_correct:
+        current_success += 1
+        print(f"(VALIDATION) User={user_id} evaluated correctly for Q{question_number}. Streak metric: {current_success}/3")
+        
+        if current_success >= 3: # Maps active MASTERY_THRESHOLD limits cleanly
+            active_doc_ref.delete()
+            print(f"(VALIDATION) Task {question_number} fully mastered and dropped from primary storage structures.")
+            
+            # ---> INSTANT GRADUATION TRIGGER <---
+            # Check if any standard question slots remain active inside this profile scope
+            remaining_tasks = []
+            for slot in ["1", "2", "3", "4"]:
+                if db.collection('Level').document(user_id).collection(level_name).document(slot).get().exists:
+                    remaining_tasks.append(slot)
+                    
+            if not remaining_tasks:
+                meta_status_ref.set({
+                    'graduated': True,
+                    'unlocked_level_2': True,
+                    'Assessment_Imported': True
+                }, merge=True)
+                print(f"(VALIDATION) Absolute practice clear verified! Automatically committed graduation status flags.")
         else:
-            # Safely increment the counter
-            doc_ref.update({'success_count': Increment(1)})
-            print(f"(PROGRESS) Correct answer. Success count now {new_success_count}/5.")
-            return True, "progressing"
+            active_doc_ref.set({'success_count': current_success}, merge=True)
     else:
-        # Penalty: reset consecutive counter back to 0
-        doc_ref.update({
-            'success_count': 0,
-        })
-        print(f"(PENALTY) Incorrect answer for '{target_word}'. Counter reset to 0.")
-        return False, "reset"
-
+        # Reset counters to zero on incorrect attempts to enforce continuous streak discipline
+        active_doc_ref.set({'success_count': 0}, merge=True)
+        print(f"(VALIDATION) Incorrect entry for Q{question_number}. Pruning target metric streak parameters.")
+        
+    return current_success, (current_success >= 3)
 
 
 
