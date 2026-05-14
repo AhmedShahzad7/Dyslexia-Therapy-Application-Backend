@@ -1208,69 +1208,83 @@ import random
 typecast_client = Typecast(api_key="__pltGcPSWdfiN4gPgxUwh2tFx4Efzw4wWCex4s3yCDQ8") 
 CHARACTER_ID = "tc_645b39b760386589fd851133" # Your Doraemon-like character
 
+CARTOON_VOICE_MAP = {
+    "doraemon":"tc_645b39b760386589fd851133",
+    "mickey": "tc_67db753311833db994c4fed7", # Your current Doraemon/Mickey voice
+    "pooh": "tc_67db753311833db994c4fed7",       # TODO: Add your Typecast ID here
+    "tom": "tc_660e5c11eef728e75f95f520",         # TODO: Add your Typecast ID here
+    "duffy": "tc_replace_with_duffy_id"      # TODO: Add your Typecast ID here
+}
+
 # 2. Ensure the audio directory exists on server startup
 # Ensure the audio directory is securely mapped within your static folder
 AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'audio')
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
-def generate_typecast_audio(text, filename):
 
+def generate_typecast_audio(text, filename, cartoon_name="doraemon"):
     try:
-        # 1. Map lowercased abbreviations to their optimal spoken forms
         direction_map = {
-            r'\bne\b': "North East",
-            r'\bnw\b': "North West",
-            r'\bse\b': "South East",
-            r'\bsw\b': "South West"
+            r'\bne\b': "North East", r'\bnw\b': "North West",
+            r'\bse\b': "South East", r'\bsw\b': "South West"
         }
 
-        # 2. Apply regex substitutions strictly on independent boundaries (\b)
-        # re.IGNORECASE ensures matching against NE, Ne, ne, nE, etc.
         spoken_text = text
         for pattern, full_form in direction_map.items():
             spoken_text = re.sub(pattern, full_form, spoken_text, flags=re.IGNORECASE)
 
-        print(f"(DEBUG) Original text: '{text}' -> Spoken text: '{spoken_text}'")
+        # Look up the specific voice ID, default to Mickey if not found
+        voice_id = CARTOON_VOICE_MAP.get(cartoon_name.lower(), CARTOON_VOICE_MAP["mickey"])
 
-        # 3. Request the expanded audio string from Typecast
         response = typecast_client.text_to_speech(TTSRequest(
             text=spoken_text,
-            model="ssfm-v30", # Ensure this model matches your Typecast plan
-            voice_id=CHARACTER_ID
+            model="ssfm-v30",
+            voice_id=voice_id # ---> DYNAMIC VOICE INJECTED HERE <---
         ))
 
-        # 4. Save the audio file to our static/audio folder
         filepath = os.path.join(AUDIO_DIR, filename)
         with open(filepath, 'wb') as f:
             f.write(response.audio_data)
 
-        # 5. Build the URL that Android will use to stream this file
         audio_url = f"http://{request.host}/static/audio/{filename}"
-        print(f"(DEBUG) Audio generated successfully via API: {audio_url}")
-        
         return audio_url
 
     except Exception as e:
         print(f"(ERROR) Failed to generate Typecast audio: {e}")
-        return None
 
-
-def get_or_generate_audio(text, filename):
-    filepath = os.path.join(AUDIO_DIR, filename)
+def get_or_generate_audio(text, base_filename, cartoon_name="doraemon"):
+    # ---> CACHE COLLISION FIX: Append the character name to the file! <---
+    # Turns "l4_slot1.wav" into "l4_slot1_mickey.wav"
+    name, ext = os.path.splitext(base_filename)
+    dynamic_filename = f"{name}_{cartoon_name.lower()}{ext}"
+    
+    filepath = os.path.join(AUDIO_DIR, dynamic_filename)
     if os.path.exists(filepath):
-        return f"http://{request.host}/static/audio/{filename}"
-    return generate_typecast_audio(text, filename)
+        return f"http://{request.host}/static/audio/{dynamic_filename}"
+        
+    return generate_typecast_audio(text, dynamic_filename, cartoon_name)
 
 
-
-def ensure_word_audio_exists(word):
+def ensure_word_audio_exists(word, cartoon_name="doraemon"):
     clean_word = word.strip().lower()
     filename = f"cached_word_v2_{clean_word}.wav"
-    # Reuses existing audio generator to ensure the file exists in static/audio/
-    return get_or_generate_audio(word.strip().capitalize(), filename)
+    return get_or_generate_audio(word.strip().capitalize(), filename, cartoon_name)
 
-
+def ensure_standalone_word_audio(word):
+    """
+    Guarantees the existence of hardcoded frontend UI audio files.
+    Bypasses dynamic character suffixes so the Android app can find them via its hardcoded URL.
+    Checks local storage first to prevent wasting Typecast API quota.
+    """
+    clean_word = word.strip().lower()
+    filename = f"cached_word_v2_{clean_word}.wav"
+    filepath = os.path.join(AUDIO_DIR, filename)
+    
+    if not os.path.exists(filepath):
+        print(f"(INFO) Standalone word missing for UI: {word}. Generating once...")
+        # Force generation using default voice, saving to the hardcoded filename
+        generate_typecast_audio(word.strip().upper(), filename, "doraemon")
 
 SLOT_CONFIGS = {
     1: {"type": "DRAWING", "prefix": "Draw the arrow"},
@@ -1278,6 +1292,24 @@ SLOT_CONFIGS = {
     3: {"type": "MCQ", "prefix": "Click the direction of given arrow ?"},
     4: {"type": "MCQ", "prefix":"Match the arrow to the correct word"},
 }
+
+def get_user_cartoon_preference(user_id):
+    """
+    Fetches the user's preferred cartoon helper from Firestore.
+    Defaults to 'mickey' if the document or field does not exist.
+    """
+    try:
+        db = get_db()
+        # Adjust 'Users' to match your actual user profile collection name
+        user_doc = db.collection('cartoon_selection').document(user_id).get()
+        if user_doc.exists:
+            data = user_doc.to_dict() or {}
+            # Ensure safe fallback to 'mickey'
+            return data.get('cartoon', 'mickey').lower().strip()
+    except Exception as e:
+        print(f"Error fetching cartoon preference for {user_id}: {e}")
+    
+    return 'mickey'
 
 
 
@@ -1292,17 +1324,20 @@ def init_level_session():
         session_questions = []
         MASTERY_THRESHOLD = 3 
 
-        # Pre-cache single word audio for Q4 speaker interactions securely
-        for direction in ["Up", "Down", "Left", "Right"]:
-            ensure_word_audio_exists(direction)
+        # Fetch the user's dynamic cartoon selection once at session start
+        user_cartoon = get_user_cartoon_preference(user_id)
 
-        # Unified document reference handling Level 1 progression state parameters
+        # ---> REMOVED THE WASTEFUL PRE-CACHING LOOP HERE <---
+        
+        all_directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
+        for direction in all_directions:
+            ensure_standalone_word_audio(direction)
+        
         meta_ref = db.collection('Level').document(user_id).collection('Level_1').document('meta_status')
         meta_doc = meta_ref.get()
         meta_data = meta_doc.to_dict() or {}
         
         is_graduated = meta_data.get('graduated', False)
-        # CRITICAL FLAG: Tracks if baseline diagnostic records have already been injected into practice structures
         has_imported_assessment = meta_data.get('Assessment_Imported', False)
 
         # 1. SCAN ACTIVE THERAPY TARGET POOL
@@ -1321,7 +1356,6 @@ def init_level_session():
                 if current_success < MASTERY_THRESHOLD:
                     target_word = data.get("Error", ["Up"])[0]
             elif not has_imported_assessment:
-                # Fallback extraction strictly permitted ONLY during initial diagnostic handover execution
                 assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_1').document(doc_id)
                 assess_doc = assess_ref.get()
                 
@@ -1331,7 +1365,6 @@ def init_level_session():
                     if assess_data.get("Answer") == "Incorrect" and raw_errors:
                         target_word = raw_errors[0] if isinstance(raw_errors, list) else str(raw_errors)
                         
-                        # Initialize tracking document directly inside active therapy pool
                         active_ref.set({
                             'Question Number': q_num,
                             'Error': [target_word.strip().capitalize()],
@@ -1345,31 +1378,27 @@ def init_level_session():
                     "word": target_word.strip().capitalize()
                 })
 
-        # Lock out future diagnostic test injections once processing completes successfully
         if imported_any_new:
             meta_ref.set({'Assessment_Imported': True}, merge=True)
             has_imported_assessment = True
 
         # 2. GRADUATION EVALUATION LOGIC
-        # If the pool is empty (and baseline scan finished), execute graduation state routing cleanly
         if not active_error_pool and not is_graduated:
-            # We explicitly write the lock flags to confirm absolute completion
             meta_ref.set({
                 'graduated': True,
                 'unlocked_level_2': True,
                 'Assessment_Imported': True
             }, merge=True)
             
-            # Explicitly return empty task list to trigger smooth onSessionComplete routing on Android UI
             return jsonify({
                 "status": "success",
+                "cartoon_selection": user_cartoon, # Inject selection here
                 "total_questions": 0,
                 "maintenance_mode": False,
                 "questions": []
             }), 200
 
         # 3. MAINTENANCE MODE GENERATOR
-        # Serves infinite continuous retention minigames once explicit graduation status is verified
         if is_graduated and not active_error_pool:
             directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
             rand_dir = random.choice(directions)
@@ -1401,10 +1430,12 @@ def init_level_session():
                 mapped_type = "MCQ"
                 mapped_slot = 4
 
-            audio_url = get_or_generate_audio(instruction_text, audio_filename)
+            # ---> FIX: Passed user_cartoon here so maintenance mode sounds right <---
+            audio_url = get_or_generate_audio(instruction_text, audio_filename, user_cartoon)
 
             return jsonify({
                 "status": "success",
+                "cartoon_selection": user_cartoon, # Inject selection here
                 "total_questions": 1,
                 "maintenance_mode": True,
                 "questions": [{
@@ -1444,7 +1475,7 @@ def init_level_session():
                 instruction_text = f"{config['prefix']} {target_word}"
                 audio_filename = f"cached_draw_v2_{clean_word}.wav" 
 
-            audio_url = get_or_generate_audio(instruction_text, audio_filename)
+            audio_url = get_or_generate_audio(instruction_text, audio_filename, user_cartoon)
 
             session_questions.append({
                 "db_question_number": error_obj["original_db_slot"],  
@@ -1455,8 +1486,10 @@ def init_level_session():
                 "audio_url": audio_url
             })
 
+        # Return final compilation payload including the parsed helper profile string
         return jsonify({
             "status": "success",
+            "cartoon_selection": user_cartoon, # Inject selection here
             "total_questions": len(session_questions),
             "maintenance_mode": False,
             "questions": session_questions
@@ -1465,9 +1498,6 @@ def init_level_session():
     except Exception as e:
         print(f"(ERROR) /init_level_session failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to initialize therapy session"}), 500
-
-
-
 
 @app.route('/predict_therapy_direction', methods=['POST'])
 def predict_therapy_direction():
@@ -1937,18 +1967,77 @@ def init_level4_session():
         session_questions = []
         MASTERY_THRESHOLD = 3 
 
+        # 1. Fetch User Character Preference
+        user_cartoon = get_user_cartoon_preference(user_id)
+
         meta_ref = db.collection('Level').document(user_id).collection('Level_4').document('meta_status')
         meta_doc = meta_ref.get()
         is_graduated = meta_doc.to_dict().get('graduated', False) if meta_doc.exists else False
 
-        # --- MAINTENANCE MODE ---
+        slot_allocations = {
+            16: {"ui_slot": 1, "type": "VOICE", "instruction": "Read the sentence out loud"},
+            17: {"ui_slot": 2, "type": "WRITING", "instruction": "Rewrite the sentence below"},
+            18: {"ui_slot": 3, "type": "GRID_SELECT", "instruction": "Find and click the target word in the grid."},
+            19: {"ui_slot": 4, "type": "COMBO", "instruction": "Read the word aloud, then type it out."}
+        }
+
+        active_error_pool = []
+
+        if not is_graduated:
+            # Scan exactly for absolute sequential database keys (16, 17, 18, 19)
+            for q_num in range(16, 20):
+                doc_id = str(q_num)
+                active_ref = db.collection('Level').document(user_id).collection('Level_4').document(doc_id)
+                active_doc = active_ref.get()
+                error_list_payload = []
+
+                if active_doc.exists:
+                    data = active_doc.to_dict() or {}
+                    raw_err = data.get("Error", [])
+                    scores_map = data.get("scores_tracker", {})
+                    
+                    for item in raw_err if isinstance(raw_err, list) else [raw_err]:
+                        clean_str = str(item).strip().lower()
+                        if clean_str and scores_map.get(clean_str, 0) < MASTERY_THRESHOLD:
+                            error_list_payload.append(clean_str)
+                else:
+                    assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_4').document(doc_id)
+                    assess_doc = assess_ref.get()
+                    if assess_doc.exists:
+                        assess_data = assess_doc.to_dict() or {}
+                        raw_err = assess_data.get("Error", []) if assess_data else []
+                        error_list_payload = [str(w).strip().lower() for w in (raw_err if isinstance(raw_err, list) else [raw_err]) if str(w).strip()]
+                        
+                        if error_list_payload:
+                            init_scores = {w: 0 for w in error_list_payload}
+                            active_ref.set({
+                                'Question Number': q_num,
+                                'Error': error_list_payload,
+                                'scores_tracker': init_scores,
+                                'success_count': 0,
+                            })
+
+                if error_list_payload:
+                    active_error_pool.append({
+                        "original_db_slot": q_num,
+                        "errors": error_list_payload
+                    })
+
+            # ---> FIX: GRADUATE WITHOUT RECURSION <---
+            if len(active_error_pool) == 0:
+                meta_ref.set({'graduated': True}, merge=True)
+                is_graduated = True
+
+        # --- MAINTENANCE MODE (Now safely evaluated AFTER graduation check) ---
         if is_graduated:
-            mini_q_data = get_l4_targets_from_csv(dummy_errors, count=3, mode="VOICE")
+            mini_q_data = get_l4_targets_from_csv(dummy_errors, max_count=3, mode="VOICE")
             instruction = "Read the sentence out loud"
-            audio_url = get_or_generate_audio(instruction, "l4_maint_sentence.wav")
+            # Pass user_cartoon to get the correct voice
+            audio_url = get_or_generate_audio(instruction, "l4_maint_sentence.wav", user_cartoon)
             
             return jsonify({
                 "status": "success",
+                "cartoon_selection": user_cartoon,
                 "total_questions": 1,
                 "maintenance_mode": True,
                 "questions": [{
@@ -1961,63 +2050,7 @@ def init_level4_session():
                 }]
             }), 200
 
-        # Define fixed multimodal mappings matching absolute database document slots
-        slot_allocations = {
-            16: {"ui_slot": 1, "type": "VOICE", "instruction": "Read the sentence out loud"},
-            17: {"ui_slot": 2, "type": "WRITING", "instruction": "Rewrite the sentence below"},
-            18: {"ui_slot": 3, "type": "GRID_SELECT", "instruction": "Find and click the target word in the grid."},
-            19: {"ui_slot": 4, "type": "COMBO", "instruction": "Read the word aloud, then type it out."}
-        }
-
-        active_error_pool = []
-
-        # Scan exactly for absolute sequential database keys (16, 17, 18, 19)
-        for q_num in range(16, 20):
-            doc_id = str(q_num)
-            active_ref = db.collection('Level').document(user_id).collection('Level_4').document(doc_id)
-            active_doc = active_ref.get()
-            error_list_payload = []
-
-            if active_doc.exists:
-                data = active_doc.to_dict()
-                raw_err = data.get("Error", [])
-                scores_map = data.get("scores_tracker", {})
-                
-                for item in raw_err if isinstance(raw_err, list) else [raw_err]:
-                    clean_str = str(item).strip().lower()
-                    if clean_str and scores_map.get(clean_str, 0) < MASTERY_THRESHOLD:
-                        error_list_payload.append(clean_str)
-            else:
-                assess_ref = db.collection('Assessment_Test').document(user_id).collection('Level_4').document(doc_id)
-                assess_doc = assess_ref.get()
-                if assess_doc.exists:
-                    assess_data = assess_doc.to_dict()
-                    raw_err = assess_data.get("Error", []) if assess_data else []
-                    error_list_payload = [str(w).strip().lower() for w in (raw_err if isinstance(raw_err, list) else [raw_err]) if str(w).strip()]
-                    
-                    if error_list_payload:
-                        init_scores = {w: 0 for w in error_list_payload}
-                        active_ref.set({
-                            'Question Number': q_num,
-                            'Error': error_list_payload,
-                            'scores_tracker': init_scores,
-                            'success_count': 0,
-                        })
-
-            if error_list_payload:
-                active_error_pool.append({
-                    "original_db_slot": q_num,
-                    "errors": error_list_payload
-                })
-
-        # Graduate if the entire pool is depleted across all multimodal slots
-        if len(active_error_pool) == 0:
-            meta_ref.set({'graduated': True})
-            return init_level4_session()
-
-        # ---> CRITICAL FIX: The random.shuffle() statement has been completely removed <---
-        # Build the final payload keeping items locked in their natural absolute database order
-
+        # Build the final payload for standard therapy
         for error_obj in active_error_pool:
             db_num = error_obj["original_db_slot"]
             current_error_array = error_obj["errors"]
@@ -2027,11 +2060,11 @@ def init_level4_session():
             q_type = config["type"]
             instruction = config["instruction"]
             
-            # Mine exactly 3 paired mini-question targets applying distinct natural constraints per mode
-            mini_q_data = get_l4_targets_from_csv(current_error_array,max_count=3, mode=q_type)
+            mini_q_data = get_l4_targets_from_csv(current_error_array, max_count=3, mode=q_type)
              
             clean_audio_name = f"l4_slot{ui_slot}.wav"
-            audio_url = get_or_generate_audio(instruction, clean_audio_name)
+            # Pass user_cartoon down here as well!
+            audio_url = get_or_generate_audio(instruction, clean_audio_name, user_cartoon)
 
             session_questions.append({
                 "db_question_number": db_num, 
@@ -2041,10 +2074,10 @@ def init_level4_session():
                 "instruction_text": instruction,
                 "audio_url": audio_url
             })
-            print(f"CURRENT SESSION LIST OF QUESTIONS==== \n {session_questions}")
 
         return jsonify({
             "status": "success",
+            "cartoon_selection": user_cartoon,
             "total_questions": len(session_questions),
             "maintenance_mode": False,
             "questions": session_questions
@@ -2053,8 +2086,6 @@ def init_level4_session():
     except Exception as e:
         print(f"(ERROR) /init_level4_session failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to initialize Level 4 session"}), 500
- 
-
 @app.route('/verify_l4_q1_voice', methods=['POST'])
 def verify_l4_q1_voice():
     """
@@ -2380,21 +2411,28 @@ def TherapyLevel2():
     
     db = get_db()
 
+    # 1. Fetch user's cartoon preference securely
+    user_cartoon = get_user_cartoon_preference(user_id)
+
+    # 2. Extract active Level 2 Target Pool
     level2_ref = db.collection('Level') \
         .document(user_id) \
         .collection('Level 2')
 
     docs = level2_ref.stream()
-
     letters_array = []
 
     for doc in docs:
         letters_array.append(doc.id)
     
-    print (letters_array)
+    print(letters_array)
     
-    return jsonify(letters_array)
-
+    # 3. Return unified structured JSON response payload
+    return jsonify({
+        "status": "success",
+        "cartoon_selection": user_cartoon,
+        "letters": letters_array
+    }), 200
 
 def decrement_therapylevel2_count(user_id,expected_Letter):
     db = get_db()
@@ -2799,7 +2837,7 @@ def find_similar_words_from_csv(error_word, count=4, required_length=None):
  
     return result[:count]
  
- 
+
 # =============================================================================
 # HELPER: build_distractor_options_for_q11
 #
@@ -2869,15 +2907,16 @@ def get_personalized_question():
  
     try:
         db = get_db()
+        
+        # ---> RESOLVE COMPANION STATE ONCE AT INITIALIZATION <---
+        user_cartoon = get_user_cartoon_preference(user_id)
  
-        # ── Step 1: Updated to reference 'Level' instead of 'Level_Schema' ─────
         level_ref = (
             db.collection('Level')
               .document(user_id)
               .collection('Level_3')
               .document(str(q_num))
         )
-        # ── Step 2: Assessment_Test fallback ──────────────────────────────────
         assessment_ref = (
             db.collection('Assessment_Test')
               .document(user_id)
@@ -2895,7 +2934,7 @@ def get_personalized_question():
             lvl_errors = level_doc.to_dict().get("Error", [])
             if lvl_errors:
                 errors = lvl_errors
-                source = "Level" # Updated log source name
+                source = "Level" 
  
         if not errors and assess_doc.exists:
             asmnt_errors = assess_doc.to_dict().get("Error", [])
@@ -2903,11 +2942,9 @@ def get_personalized_question():
                 errors = asmnt_errors
                 source = "Assessment_Test"
  
-        # The first error in the list is what we focus on this session
         error_word = errors[0].strip().lower() if errors else "cat"
         print(f"(Q{q_num}) User={user_id} | Source={source} | Error word='{error_word}'")
  
-        # ── Step 3: Build question content from CSV ───────────────────────────
         response_data    = []
         instruction_text = ""
  
@@ -2940,6 +2977,8 @@ def get_personalized_question():
             )
  
         return jsonify({
+            "status":           "success",
+            "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
             "question_number":  q_num,
             "instruction_text": instruction_text,
             "target_word":      error_word,
@@ -2950,7 +2989,6 @@ def get_personalized_question():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
- 
  
 # =============================================================================
 # STEP 4: process_therapy_submission  (shared helper)
@@ -3183,7 +3221,7 @@ from firebase_admin import firestore
 @app.route('/get_personalized_question_quiz3', methods=['GET'])
 def get_personalized_question_quiz3():
     user_id = request.args.get('user_id')
-    q_num   = str(request.args.get('question_number', '1')).strip()  # always a string
+    q_num   = str(request.args.get('question_number', '1')).strip() 
 
     if not user_id:
         return jsonify({"error": "Missing user_id"}), 400
@@ -3191,10 +3229,10 @@ def get_personalized_question_quiz3():
     try:
         db = get_db()
         error_words = []
+        
+        # ---> RESOLVE COMPANION STATE ONCE AT INITIALIZATION <---
+        user_cartoon = get_user_cartoon_preference(user_id)
 
-        # ── Source 1: Level_Schema → Level_3 ─────────────────────────────────
-        # FIX: added  3 <= len(w) <= 5  guard so single-char Firestore values
-        #      never become the quiz target word.
         try:
             docs = (db.collection('Level')
                       .document(user_id)
@@ -3208,7 +3246,6 @@ def get_personalized_question_quiz3():
         except Exception as e:
             print(f"Level_Schema read error: {e}")
 
-        # ── Source 2: Assessment_Test → Level_3 (skip mastered) ──────────────
         try:
             docs = (db.collection('Assessment_Test')
                       .document(user_id)
@@ -3225,7 +3262,6 @@ def get_personalized_question_quiz3():
         except Exception as e:
             print(f"Assessment_Test read error: {e}")
 
-        # ── Source 3: CSV fallback ────────────────────────────────────────────
         if not error_words:
             pool = [w for w in CSV_WORDS if 3 <= len(w) <= 5]
             random.shuffle(pool)
@@ -3236,33 +3272,35 @@ def get_personalized_question_quiz3():
 
         print(f"(QUIZ3 Q{q_num}) User={user_id} | Target='{target_word}'")
 
-        # ── Route by question type ────────────────────────────────────────────
         if q_num == "1":
-            # MCQ — target word + 2 distractors
             options = build_distractor_options_for_q11(target_word)
             return jsonify({
+                "status": "success",
+                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
                 "audio_url":   None,
                 "target_word": target_word,
                 "data": [{"target": target_word, "options": options}]
             }), 200
 
         elif q_num == "2":
-            # Read-aloud — flat list of similar words used as swipe cards
             read_words = find_similar_words_from_csv(target_word, count=4)
             return jsonify({
+                "status": "success",
+                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
                 "audio_url":   None,
                 "target_word": target_word,
-                "data":        read_words       # flat list of strings
+                "data":        read_words 
             }), 200
 
         elif q_num == "3":
-            # Rhyme grid — 12 shuffled words
             rhyme_words = find_similar_words_from_csv(target_word, count=12)
             random.shuffle(rhyme_words)
             return jsonify({
+                "status": "success",
+                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
                 "audio_url":   None,
                 "target_word": target_word,
-                "data":        rhyme_words      # flat list of 12 strings
+                "data":        rhyme_words 
             }), 200
 
         else:
@@ -3271,7 +3309,6 @@ def get_personalized_question_quiz3():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 # =============================================================================
 # POST /submit_quiz_answer
@@ -3376,6 +3413,9 @@ def submit_quiz_answer():
 # =============================================================================
 # GET /api/scores/<user_id>   — Fully aligned with strict sequential gating logic
 # =============================================================================
+import traceback
+from flask import jsonify
+
 @app.route("/api/scores/<user_id>", methods=['GET'])
 def get_user_score(user_id):
     try:
@@ -3400,30 +3440,51 @@ def get_user_score(user_id):
                 "data": []
             }), 200
 
-        # ── 2. BASELINE DATA EXTRACTION ──
+        # ── 2. BASELINE DATA EXTRACTION (ASSESSMENT FIRST) ──
         assessment_ref = db.collection('Assessment_Test').document(user_id)
         level_root_ref = db.collection('Level').document(user_id)
         quiz_root_ref  = db.collection('Quiz').document(user_id)
         
         scores_summary = []
+        assessment_scores = {}
         level2_is_empty = True
 
         level_totals = {'Level_1': 5, 'Level_2': 5, 'Level_3': 5, 'Level_4': 4}
+        
+        # Calculate raw scores based on error documents present
         for level_name, total_questions in level_totals.items():
             docs = list(assessment_ref.collection(level_name).stream())
             errors_made = len(docs)
+            
             if level_name == 'Level_2' and errors_made > 0:
                 level2_is_empty = False
 
             correct = max(0, total_questions - errors_made)
+            assessment_scores[level_name] = correct
             scores_summary.append({
                 "level": level_name,
                 "score": f"{correct}/{total_questions}"
             })
 
-        # ── 3. DYNAMIC STAGE STATE EVALUATION ──
+        # ── 3. STRICT SEQUENTIAL GATING ENGINE (INITIALIZE VIA ASSESSMENT) ──
+        current_max_index = 0
+
+        # Assessment First Priority Rules:
+        # Pass Level 1 (>=3) -> Instantly unlock Quiz 1 (Index 1)
+        if assessment_scores.get('Level_1', 0) >= 3:
+            current_max_index = 1
+            
+            # Pass Level 2 (>=3) -> Instantly unlock Quiz 2 (Index 3)
+            if assessment_scores.get('Level_2', 0) >= 3:
+                current_max_index = 3
+                
+                # Pass Level 3 (>=3) -> Instantly unlock Quiz 3 (Index 5)
+                if assessment_scores.get('Level_3', 0) >= 3:
+                    current_max_index = 5
+
+        # ── 4. DYNAMIC STAGE STATE EVALUATION ──
         
-        # Stage 1: Level 1 Mastery
+        # Stage 1: Level 1 Mastery (Therapy fallback)
         lvl1_graduated = False
         l1_meta = level_root_ref.collection('Level_1').document('meta_status').get()
         if l1_meta.exists:
@@ -3497,33 +3558,32 @@ def get_user_score(user_id):
             "score_summary": {"passed_75": quiz3_passed}
         })
 
-        # ── 4. STRICT SEQUENTIAL GATING ENGINE ──
-        current_max_index = 0
+        # ── 5. LAYER DYNAMIC GAMEPLAY OVERRIDES ──
+        
+        # Apply Level 1 therapy graduation fallback if assessment failed
+        if lvl1_graduated and current_max_index < 1:
+            current_max_index = 1  
 
-        # Stage 1 Basics
-        if lvl1_graduated:
-            current_max_index = 1  # Unlocks Quiz 1
+        # Passing Quiz 1 unlocks Level 2
+        if quiz1_passed and current_max_index < 2:
+            current_max_index = 2  
+            
+        # Completing Level 2 therapy folder unlocks Quiz 2
+        if lvl2_graduated and current_max_index < 3:
+            current_max_index = 3  
 
-        # Quiz 1 Pass -> Unlocks Level 2
-        if quiz1_passed:
-            if current_max_index < 2:
-                current_max_index = 2  
-            if lvl2_graduated:
-                if current_max_index < 3:
-                    current_max_index = 3  # Unlocks Quiz 2
+        # Passing Quiz 2 independently unlocks Level 3
+        if quiz2_passed and current_max_index < 4:
+            current_max_index = 4  
+            
+        # Completing Level 3 therapy folder unlocks Quiz 3
+        if lvl3_graduated and current_max_index < 5:
+            current_max_index = 5  
 
-        # Override 1: Passing Quiz 2 independently unlocks Level 3
-        if quiz2_passed:
-            if current_max_index < 4:
-                current_max_index = 4  
-            if lvl3_graduated:
-                if current_max_index < 5:
-                    current_max_index = 5  # Unlocks Quiz 3
+        # Passing Quiz 3 independently unlocks Level 4
+        if quiz3_passed and current_max_index < 6:
+            current_max_index = 6
 
-        # Override 2: Passing Quiz 3 independently unlocks Level 4
-        if quiz3_passed:
-            if current_max_index < 6:
-                current_max_index = 6
         return jsonify({
             "status": "success",
             "hasCompletedAssessment": True,
