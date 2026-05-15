@@ -79,15 +79,11 @@ def direction_predict(img):
 
 def predict_handwriting(image):
     # 1. Load the processor and model from Hugging Face
-    # 'processor' handles image resizing/normalization and text decoding
     processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-handwritten')
     model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-handwritten')
 
-    # 3. Preprocess the image into pixel values (tensors)
     pixel_values = processor(images=image, return_tensors="pt").pixel_values
 
-    # 4. Generate text (inference)
-    # The model generates token IDs which we then decode into text
     generated_ids = model.generate(pixel_values)
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 

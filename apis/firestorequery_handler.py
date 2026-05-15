@@ -10,11 +10,9 @@ def store_direction_error(user_id, direction_predicted, question_number):
     
     error_key = None
     q_str = str(question_number) 
-    
-    # --- UPDATED DYNAMIC LOGIC FOR QUESTION 1 ---
+   
     if q_str == "1"and direction_predicted != "Up":
         error_key = "Up"
-    # --- OLD STATIC LOGIC FOR OTHER QUESTIONS ---
     elif q_str == "2" and direction_predicted != "Left":
         error_key = "Left"
     elif q_str == "3" and direction_predicted != "Down":
@@ -115,13 +113,12 @@ def store_mcq_error(user_id,answer_list,question_number):
         for word in answer_list:
             if word != target_word:
                 if word == "saw":
-                    # "saw" is a specific reversal error common in dyslexia THIS WILL BE HANDLED LATER
                     detected_errors.append(word)
                 else:
                     detected_errors.append(word)
         found_count = answer_list.count(target_word)
         if found_count < count:
-            missing_count = count - found_count #MISSED WILL BE HANDLED LATERR
+            missing_count = count - found_count 
             detected_errors.append(word)
         if detected_errors:
             print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
@@ -140,7 +137,6 @@ def store_mcq_error(user_id,answer_list,question_number):
 def store_cartoon_selection(user_id, cartoon_name):
     db = get_db()
     
-    # Reference the 'cartoon_selection' collection
     doc_ref = db.collection('cartoon_selection').document(user_id)
     
     try:
@@ -148,7 +144,6 @@ def store_cartoon_selection(user_id, cartoon_name):
         user_ref.set({
             "hasCompletedAssessment": True,
         }, merge=True)
-        # Save the selection 
         doc_ref.set({
             "cartoon": cartoon_name.lower() 
         })
@@ -169,13 +164,11 @@ def store_voice_error(user_id,targetname,error,question_number,detected_errors):
                     .collection('Level_3') \
                     .document(str(question_number))
         
-        # 1. Ensure the document exists and is marked as Incorrect
         doc_ref.set({
             'Question Number': int(question_number),
             'Answer': 'Incorrect',
         }, merge=True)
 
-        # 2. Push the specific error into the Error array
         doc_ref.update({
             'Error': firestore.ArrayUnion(detected_errors)
         })
@@ -189,7 +182,6 @@ def store_voice_error1(user_id, targetname, error, question_number, detected_err
         
         doc_ref = db.collection('Assessment_Test').document(user_id).collection(level).document(str(question_number))
         
-        # 1. Mark the question status
         doc_ref.set({
             'Question Number': int(question_number),
             'Answer': 'Incorrect',
@@ -206,7 +198,6 @@ def store_voice_error1(user_id, targetname, error, question_number, detected_err
         return False
 
 
-#========================================= PERSONALIZED Levels================================
 
 #LEVEL 1 
 
@@ -230,12 +221,10 @@ def update_therapy_progress(user_id, target_word, is_correct, question_number, l
         current_success += 1
         print(f"(VALIDATION) User={user_id} evaluated correctly for Q{question_number}. Streak metric: {current_success}/3")
         
-        if current_success >= 3: # Maps active MASTERY_THRESHOLD limits cleanly
+        if current_success >= 3: 
             active_doc_ref.delete()
             print(f"(VALIDATION) Task {question_number} fully mastered and dropped from primary storage structures.")
             
-            # ---> INSTANT GRADUATION TRIGGER <---
-            # Check if any standard question slots remain active inside this profile scope
             remaining_tasks = []
             for slot in ["1", "2", "3", "4"]:
                 if db.collection('Level').document(user_id).collection(level_name).document(slot).get().exists:
@@ -261,7 +250,6 @@ def update_therapy_progress(user_id, target_word, is_correct, question_number, l
 
 
 
-# --- LEVEL 4 PROGRESS UPDATER (PARALLEL DICTIONARY SAFE) ---
 def update_therapy_progress_l4(user_id, target_word, is_correct, question_number):
     try:
         db = get_db()
@@ -276,7 +264,6 @@ def update_therapy_progress_l4(user_id, target_word, is_correct, question_number
         doc = doc_ref.get()
         clean_target = str(target_word).strip().lower()
         
-        # 1. Failsafe Initialization
         if not doc.exists:
             initial_array = [clean_target]
             initial_map = {clean_target: 1 if is_correct else 0}
@@ -302,7 +289,6 @@ def update_therapy_progress_l4(user_id, target_word, is_correct, question_number
             if clean_target not in current_errors:
                 current_errors.append(clean_target)
                 
-        # 2. Process Outcomes Independently
         if is_correct:
             scores_map[clean_target] += 1
             current_score = scores_map[clean_target]
