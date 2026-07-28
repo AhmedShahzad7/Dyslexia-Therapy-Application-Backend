@@ -224,6 +224,7 @@ def predict_q6():
         
         x = (120 - w) / 2
         y = (120 - h) / 2 - 10 
+        y = (120 - h) / 2 - 10 
         
    
         draw.text((x, y), letter, fill=(0, 0, 0), font=font)
@@ -1064,6 +1065,7 @@ def generate_typecast_audio(text, filename, cartoon_name="doraemon"):
             text=spoken_text,
             model="ssfm-v30",
             voice_id=voice_id 
+            voice_id=voice_id 
         ))
 
         filepath = os.path.join(AUDIO_DIR, filename)
@@ -1472,6 +1474,7 @@ def generate_quiz1():
             
             if slot_num == 1:
                 target_word = cardinal_dirs[0] 
+                target_word = cardinal_dirs[0] 
             elif slot_num==3:
               
                 target_word = combined_dirs[index - 1] 
@@ -1490,6 +1493,7 @@ def generate_quiz1():
                 q_type = "MCQ"
                 instruction_text = "Click the direction of the given arrow"
                 audio_filename = f"cached_identify_v2_down.wav"
+            else: 
             else: 
                 q_type = "MCQ"
                 instruction_text = "Match the arrow to the correct word"
@@ -1687,6 +1691,7 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
                 if fallback_candidates:
                     valid_matches = pd.DataFrame(fallback_candidates, columns=['raw_text'])
                 else:
+                    valid_matches = df 
                     valid_matches = df 
 
             available = valid_matches[~valid_matches['raw_text'].isin(used_sentences)]
@@ -2650,6 +2655,7 @@ def get_personalized_question():
         return jsonify({
             "status":           "success",
             "cartoon_selection": user_cartoon, 
+            "cartoon_selection": user_cartoon, 
             "question_number":  q_num,
             "instruction_text": instruction_text,
             "target_word":      error_word,
@@ -2660,6 +2666,7 @@ def get_personalized_question():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 def process_therapy_submission(user_id, q_num, target_word, is_correct):
     db = get_db()
@@ -2703,6 +2710,7 @@ def process_therapy_submission(user_id, q_num, target_word, is_correct):
             print(f"(THERAPY) User={user_id} Q{q_num}: CORRECT — '{target_word}' removed from Level list.")
             
 
+
 @app.route('/check_answers_therapy', methods=['POST'])
 def check_answers_therapy():
     try:
@@ -2723,6 +2731,7 @@ def check_answers_therapy():
         return jsonify({"status": "error", "message": str(e)}), 500
  
  
+
 
 @app.route('/transcribe_and_score_therapy', methods=['POST'])
 def transcribe_and_score_therapy():
@@ -2836,10 +2845,12 @@ def predict_handwriting_batch_therapy():
 
 
 
+
 import traceback, random
 from flask import request, jsonify
 from config.firebase import get_db
 from firebase_admin import firestore
+
 
 
 
@@ -2911,6 +2922,7 @@ def get_personalized_question_quiz3():
             return jsonify({
                 "status": "success",
                 "cartoon_selection": user_cartoon, 
+                "cartoon_selection": user_cartoon, 
                 "audio_url":   None,
                 "target_word": target_word,
                 "data":        read_words 
@@ -2921,6 +2933,7 @@ def get_personalized_question_quiz3():
             random.shuffle(rhyme_words)
             return jsonify({
                 "status": "success",
+                "cartoon_selection": user_cartoon, 
                 "cartoon_selection": user_cartoon, 
                 "audio_url":   None,
                 "target_word": target_word,
@@ -2933,6 +2946,7 @@ def get_personalized_question_quiz3():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 
 @app.route('/submit_quiz_answer', methods=['POST'])
@@ -2963,10 +2977,12 @@ def submit_quiz_answer():
      
         from collections import defaultdict
         latest_per_q = {}  
+        latest_per_q = {}  
 
         for doc in all_docs:
             data = doc.to_dict() or {}
             qn   = data.get('question_number', 0)
+            if qn not in (1, 2, 3):        
             if qn not in (1, 2, 3):        
                 continue
             ts = data.get('timestamp')     

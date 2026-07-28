@@ -122,6 +122,7 @@ def store_mcq_error(user_id,answer_list,question_number):
         found_count = answer_list.count(target_word)
         if found_count < count:
             missing_count = count - found_count 
+            missing_count = count - found_count 
             detected_errors.append(word)
         if detected_errors:
             print(f"Firestore updated for User {user_id} with errors: {detected_errors}")
@@ -227,6 +228,7 @@ def update_therapy_progress(user_id, target_word, is_correct, question_number, l
         current_success += 1
         print(f"(VALIDATION) User={user_id} evaluated correctly for Q{question_number}. Streak metric: {current_success}/3")
         
+        if current_success >= 3: 
         if current_success >= 3: 
             active_doc_ref.delete()
             print(f"(VALIDATION) Task {question_number} fully mastered and dropped from primary storage structures.")
