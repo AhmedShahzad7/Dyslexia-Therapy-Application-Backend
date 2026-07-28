@@ -17,7 +17,7 @@ img_width=64
 model = tf.keras.models.load_model('models/letter_model.h5')
 
 
-#CLASS NAMES EXCEPTION HANDLING
+
 try:
     with open("models/class_names.txt", "r") as f:
         CLASS_NAMES = [line.strip() for line in f.readlines()]
@@ -27,7 +27,7 @@ except FileNotFoundError:
 
 
 
-#PREDICTING LETTERS
+
 def letter_predict(img):
     img = img.resize((img_height, img_width
     ))
@@ -37,15 +37,14 @@ def letter_predict(img):
     plt.title("Input Image")
     plt.savefig("models/input_img.png")
     plt.close()
-    # Predict
+ 
     predictions = model.predict(img_array)
 
     predicted_class = CLASS_NAMES[np.argmax(predictions)]
 
     confidence = np.max(predictions)
     
-    #HIDE GEMINI CODE ##
-    # print(g_handler_letter(img)) 
+
 
     predictions_indices = model.predict(img_array)[0]
     top_5_indices = np.argsort(predictions_indices)[-5:][::-1]
@@ -63,7 +62,7 @@ def letter_predict(img):
 
 
 
-#PREDICTING DIRECTIONS
+
 def direction_predict(img):
     img = img.resize((img_height, img_width
     ))
@@ -73,21 +72,18 @@ def direction_predict(img):
     plt.title("Direction Image")
     plt.savefig("models/direction_img.png")
     plt.close()
-    # Predict
+
     return g_handler_direction(img)
  
 
 def predict_handwriting(image):
-    # 1. Load the processor and model from Hugging Face
-    # 'processor' handles image resizing/normalization and text decoding
+   
     processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-handwritten')
     model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-handwritten')
 
-    # 3. Preprocess the image into pixel values (tensors)
+  
     pixel_values = processor(images=image, return_tensors="pt").pixel_values
 
-    # 4. Generate text (inference)
-    # The model generates token IDs which we then decode into text
     generated_ids = model.generate(pixel_values)
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 

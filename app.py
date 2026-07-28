@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 import traceback
 import string
 
-#IMPORTING FUNCTIONS FROM FOLDER
+
 from config.firebase import initialize_firebase
 from apis.model_api import letter_predict
 from apis.model_api import direction_predict
@@ -27,9 +27,9 @@ import requests
 
 
 app = Flask(__name__)
-#WHISPER X
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'temp_audio') # <-- Now it's an absolute path!
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'temp_audio')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 device = "cpu" 
 compute_type = "int8" 
@@ -39,14 +39,12 @@ print("Model loaded successfully!")
 
 
 
-#INITIALIZING FIREBASE
 initialize_firebase()
 
 
-#LETTER API REQUEST
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
-    # 2. Check if an audio file was sent in the request
     if 'audio' not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
         
@@ -56,21 +54,19 @@ def transcribe_audio():
     file.save(filepath)
     
     try:
-        # 3. Load the saved audio and transcribe it
+
         audio = whisperx.load_audio(filepath)
         result = model.transcribe(audio, batch_size=8) 
-        
-        # 4. Clean up the temporary file
+
         os.remove(filepath)
-        
-        # 5. Return the transcribed text segments as JSON
+
         return jsonify({"transcription": result["segments"]}), 200
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-#A-Level Question 12
+
 @app.route('/transcribe_and_score', methods=['POST'])
 def transcribe_and_score():
     if 'audio' not in request.files or 'target_word' not in request.form:
@@ -84,27 +80,20 @@ def transcribe_and_score():
     file.save(filepath)
     
     try:
-        # 1. Transcribe the audio
         audio = whisperx.load_audio(filepath)
         result = model.transcribe(audio, batch_size=8) 
         os.remove(filepath)
-        
-        # 2. Extract and clean the text (remove punctuation and make lowercase)
+
         raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
         transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
         
-        # If Whisper picked up multiple words (e.g., "the board"), grab the last one
         words_spoken = transcribed_clean.split()
         word_to_compare = words_spoken[-1] if words_spoken else ""
 
-        # 3. Calculate Phonetic Similarity
-        # Jaro-Winkler prioritizes words that start with the same sounds/letters
         similarity_score = jellyfish.jaro_winkler_similarity(target_word, word_to_compare)
         
-        # 4. Set your threshold! 0.80 is usually the sweet spot for minor AI misinterpretations.
         is_correct = bool(similarity_score >= 0.65)
         
-        # Optional: Generate the raw phonetic codes just so you can see them in your logs!
         target_metaphone = jellyfish.metaphone(target_word)
         transcribed_metaphone = jellyfish.metaphone(word_to_compare)
         
@@ -143,7 +132,6 @@ def predict_letter():
     print(prediction)
 
 
-#DIRECTOIN API REQUEST ALEVEL 1 QUESTION 1
 @app.route("/predict_direction", methods=["POST"])
 def predict_direction():
     user_id = request.form.get('user_id')
@@ -159,7 +147,6 @@ def predict_direction():
         return direction
     return "error"
 
-#DIRECTION MCQ ALEVEL 1 QUESTION 2
 @app.route("/predict_direction_mcq", methods=["POST"])
 def predict_direction_mcq():
     user_id = request.form.get('user_id')
@@ -172,20 +159,20 @@ def predict_direction_mcq():
         update_success = store_direction_error(user_id, arrow_selected,question_number)
         print(update_success)
     return "error"
-# DIRECTION MATCHING (ALEVEL 1 QUESTION 4)
+
+
 @app.route("/predict_q4", methods=["POST"])
 def predict_q4():
     user_id = request.form.get('user_id')
     question_number = request.form.get('question_number', "4") 
     
-    # This receives: "Completed", "Correct Match: UP", or "Error: ..."
     arrow_selected = request.form.get('arrow_selected') 
     
     if user_id:
         
         print(f"\n(DEBUG) Assessment Level 1 Question {question_number} RECEIVED REQUEST!! USERID: {user_id},QUESTION NUMBER: {question_number}, USER_INPUT: {arrow_selected}\n")
      
-        # Store the status in Firebase
+
         update_success = store_direction_error(user_id, arrow_selected, question_number)
         
         if update_success:
@@ -194,7 +181,7 @@ def predict_q4():
             return "Database Error"
 
     return "error: missing user_id"
-# DIRECTION MATCHING (ALEVEL 1 QUESTION 5)
+
 @app.route("/predict_q5", methods=["POST"])
 def predict_q5():
     user_id = request.form.get('user_id')
@@ -212,7 +199,7 @@ def predict_q5():
     return "error"
 
 
-#A-LEVEL 2 QUESTION#6
+
 @app.route("/predict_q6",methods=['POST'])
 def predict_q6():
     user_id=request.form.get('user_id')
@@ -227,28 +214,21 @@ def predict_q6():
         img = Image.new('RGB', (120, 120), color=(255, 255, 255)) 
         draw = ImageDraw.Draw(img)
 
-        # 2. Load the font
         try:
-            # Use a large font size to fill the 120x120 space
             font = ImageFont.truetype("arial.ttf", 100)
         except:
             font = ImageFont.load_default()
 
-        # 3. Center the letter on the 120x120 canvas
-        # Get dimensions of the letter
         bbox = draw.textbbox((0, 0), letter, font=font)
         w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         
-        # Calculate coordinates to put the letter in the middle
         x = (120 - w) / 2
-        y = (120 - h) / 2 - 10 # Slight offset for visual centering
+        y = (120 - h) / 2 - 10 
         
-        # 4. Draw the letter in black (0)
+   
         draw.text((x, y), letter, fill=(0, 0, 0), font=font)
 
-        #save the image
-        # image_name = f"input_{letter}.png"
-        # img.save(image_name)
+
         result=letter_predict(img)
         predicted_letter=""
         for x in result['prediction']:
@@ -290,7 +270,7 @@ def predict_q6():
             })
             return "incorrect"
 
-#A-LEVEL 2 QUESTION#7
+
 @app.route("/predict_q7",methods=['POST'])
 def predict_q7():
     user_id=request.form.get('user_id')
@@ -302,8 +282,7 @@ def predict_q7():
         print("The Question Number: ",question_number)
         print("Expected Letter: ",expected_Letter)
         img = Image.open(file.stream).convert("RGB") 
-        #for debugging
-        #img.save("test.png")
+       
         db = get_db()
         doc_ref = db.collection('Assessment_Test') \
             .document(user_id) \
@@ -328,7 +307,7 @@ def predict_q7():
             for x in pred['prediction']:
                 if isinstance(x, str):
                     model_predict= x
-            # print(model_predict)
+     
             if expected_Letter == 'p':
                 if model_predict not in ['p','P_caps']:
                     doc_ref.set({
@@ -366,7 +345,7 @@ def predict_q7():
                 else:
                     print("Correct d")
 
-#A-Level 2 Question#8
+
 @app.route("/predict_q8",methods=['POST'])
 def predict_q8():
     user_id=request.form.get('user_id')
@@ -383,17 +362,13 @@ def predict_q8():
             .document(str(question_number))
         print("The User(id): ",user_id)
         print("The Question Number: ",question_number)
-        #Box n
+
         if Box_Index=="1":
             img = Image.open(file.stream).convert("RGB") 
             print("Box Index",Box_Index)
             print("Expected Letter: ",expected_Letter)
             model_predict_1=g_handler_letter(img)
-            # model_predict_1=""
-            # for x in pred['prediction']:
-            #     if isinstance(x, str):
-            #         model_predict_1= x
-            # print("Model Prediction: ",model_predict_1)
+            
             print("Model Prediction: ",model_predict_1)
             if model_predict_1 != 'n':
                 doc_ref.set({
@@ -401,14 +376,11 @@ def predict_q8():
                     'Answer': 'Incorrect',
                     'Error': ArrayUnion(['n'])
                     },merge=True)
-                # doc_ref.update({
-                #     'Error': ArrayUnion(['n'])
-                #     })
+                
                 print("Error n")
                 return "incorrect"
             print("correct")
             return "correct"
-        #Box u
         elif Box_Index=="2":
             img = Image.open(file.stream).convert("RGB") 
             print("Box Index",Box_Index)
@@ -426,14 +398,11 @@ def predict_q8():
                     'Answer': 'Incorrect',
                     'Error': ArrayUnion(['u'])
                     },merge=True)
-                # doc_ref.update({
-                #     'Error': ArrayUnion(['u'])
-                #     })
+               
                 print("Error u")
                 return "incorrect"
             print("correct")
             return "correct"
-        #Box s
         elif Box_Index=="3":
             img = Image.open(file.stream).convert("RGB") 
             print("Box Index",Box_Index)
@@ -451,14 +420,11 @@ def predict_q8():
                     'Answer': 'Incorrect',
                     'Error': ArrayUnion(['s'])
                     },merge=True)
-                # doc_ref.update({
-                #     'Error': ArrayUnion(['s'])
-                #     })
+           
                 print("Error s")
                 return "incorrect"
             print("correct")
             return "correct"
-        #Box z
         elif Box_Index=="4":
             img = Image.open(file.stream).convert("RGB") 
             print("Box Index",Box_Index)
@@ -476,16 +442,14 @@ def predict_q8():
                     'Answer': 'Incorrect',
                     'Error': ArrayUnion(['z'])
                     },merge=True)
-                # doc_ref.update({
-                #     'Error': ArrayUnion(['z'])
-                #     })
+               
                 print("Error z")
                 return "incorrect"
             print("correct")
             return "correct"
         else:
             return "incorrect"
-  #A-Level 2 Question#9
+
 @app.route('/transcribe_phoneme', methods=['POST'])
 def transcribe_phoneme():
     if 'audio' not in request.files or 'target_sound' not in request.form:
@@ -510,7 +474,7 @@ def transcribe_phoneme():
         raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
         transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
         
-        # Get the word the AI heard
+
         words_spoken = transcribed_clean.split()
         heard_word = words_spoken[0] if words_spoken else ""
         
@@ -560,7 +524,6 @@ def transcribe_phoneme():
 
 
 
-#A-Level 2 Question#10
 @app.route("/predict_q10",methods=['POST'])
 def predict_q10():
     user_id=request.form.get('user_id')
@@ -592,8 +555,6 @@ def predict_q10():
 
 
 
-
-#A-LEVEL 3 QUESTION#11 14
 @app.route("/check_answers_q11",methods=['POST'])
 def check_answers_q11():
     user_id = request.form.get('user_id')
@@ -611,7 +572,6 @@ def check_answers_q11():
     return "error"
 
 
-#A-LEVEL 3 QUESTION#15
 @app.route("/predict_handwriting_batch",methods=['POST'])
 def predict_handwriting_batch():
     user_id = request.form.get('user_id')
@@ -634,7 +594,7 @@ def predict_handwriting_batch():
 
                 expected_char = target_word[i]
                 
-                # Convert image for model
+          
                 img = Image.open(file.stream).convert("RGB")
                 if expected_char.lower() in ['a', 'i', 'g', 'r']:
                     pred_response = g_handler_letter(img)
@@ -649,30 +609,25 @@ def predict_handwriting_batch():
                 
                 print(f"Letter {i}: Expected '{expected_char}' vs Predicted '{model_predict}'")
 
-                # --- COMPARISON LOGIC ---
-                # Check if the model's prediction matches the expected letter.
-                # We use .lower() to allow 'F' == 'f'
+               
 
                 if model_predict.lower() != expected_char.lower():
                     if (expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)==0) or
                         expected_char.lower()=='b' and (str(model_predict) =='B_caps')):
                         continue
-                    # Record the error
+                
                     else:
                         error_msg =expected_char
                         detected_errors.append(error_msg)
 
-            # 4. Update Database based on results
             if detected_errors:
                 print(f"Errors Found: {detected_errors}")
                 
-                # Mark Question as Incorrect
                 doc_ref.set({
                     'Question Number': int(question_number),
                     'Answer': 'Incorrect',
                 }, merge=True)
 
-                # Add specific errors to the array
                 doc_ref.update({
                     'Error': firestore.ArrayUnion(detected_errors)
                 })
@@ -693,7 +648,6 @@ def question16():
     if 'audio' not in request.files or 'target_sound' not in request.form:
         return jsonify({"error": "Missing audio file or target_sound"}), 400
         
-    # 'target_sound' is now a sentence like "The cat is big"
     target_sentence = request.form['target_sound'].lower().strip()
     target_words = re.sub(r'[^\w\s]', '', target_sentence).split()
     
@@ -707,7 +661,6 @@ def question16():
     
     try:
         
-        # 1. Transcribe the full sentence
         audio = whisperx.load_audio(filepath)
         result = model.transcribe(audio, batch_size=8, language="en") 
         os.remove(filepath)
@@ -718,31 +671,25 @@ def question16():
         heard_text_clean = re.sub(r'[^\w\s]', '', raw_text)
         heard_words = heard_text_clean.split()
         
-        # 2. Identify Incorrect Words
-        # We compare word-by-word. 
-        # Note: This assumes the user says words in the correct order.
         detected_errors = []
         
-        # We iterate through the target words
         for i, target_w in enumerate(target_words):
-            # Check if the AI actually heard a word at this position
+     
             if i < len(heard_words):
                 heard_w = heard_words[i]
                 similarity = jellyfish.jaro_winkler_similarity(target_w, heard_w)
                 print(f"Comparing [{target_w}] vs [{heard_w}] -> Similarity: {similarity:.2f}")
                 
-                # If similarity is too low, it's a pronunciation error
-                if similarity < 0.65: # Slightly higher threshold for sentences
+            
+                if similarity < 0.65: 
                     detected_errors.append(target_w)
             else:
-                # User skipped the word or AI didn't catch it
+             
                 detected_errors.append(target_w)
 
-        # 3. Final Result Logic
         is_fully_correct = len(detected_errors) == 0
 
 
-        # 4. Database Update
         if not is_fully_correct and user_id:
             db = get_db()
             doc_ref = db.collection('Assessment_Test') \
@@ -756,7 +703,7 @@ def question16():
                 'Full Sentence': target_sentence
             }, merge=True)
 
-            # Store only the specific words that were wrong
+           
             doc_ref.update({
                 'Error': firestore.ArrayUnion(detected_errors)
             })
@@ -773,8 +720,6 @@ def question16():
         return jsonify({"error": str(e)}), 500
     
 
-
-#level 4 question 18 
 @app.route("/check_answers_q18", methods=['POST'])
 def check_answers_q18():
     user_id = request.form.get('user_id')
@@ -785,16 +730,13 @@ def check_answers_q18():
         return "Missing Data", 400
 
     try:
-        # 1. Parse the JSON string from the frontend
         selected_words = json.loads(answers_list_raw)
         
-        # 2. PRINT full selection to VS Code Terminal
         print(f"\n--- Question {question_number} Selection ---")
         print(f"User ID: {user_id}")
         print(f"Full Selection: {selected_words}")
         print("------------------------------------------\n")
         
-        # 3. Filter: Identify only words that are NOT "bog"
         detected_errors = [word for word in selected_words if word.lower() != "bog"]
         
         db = get_db()
@@ -803,7 +745,6 @@ def check_answers_q18():
                     .collection('Level_4') \
                     .document(str(question_number))
 
-        # 4. Prepare Firebase Payload (No 'User Selection' field)
         if detected_errors:
             doc_ref.set({
                 'Question Number': int(question_number),
@@ -811,13 +752,12 @@ def check_answers_q18():
                 'Timestamp': firestore.SERVER_TIMESTAMP
             }, merge=True)
             
-            # Store ONLY the errors in the Firebase array
             doc_ref.update({
                 'Error': firestore.ArrayUnion(detected_errors)
             })
             return "Errors stored to Firebase; Full list printed to terminal", 200
         else:
-            # If everything was correct, mark it so
+           
             doc_ref.set({
                 'Question Number': int(question_number),
                 'Answer': 'Correct',
@@ -828,16 +768,10 @@ def check_answers_q18():
     except Exception as e:
         print(f"Error: {e}")
         return str(e), 500
-#level 4 Question 17 and 19
-
-
-
-
 
 @app.route("/predict_handwriting_sentence", methods=['POST'])
 def predict_handwriting_sentence():
     user_id = request.form.get('user_id')
-    # For Level 4, we receive a full sentence (e.g., "The big dog")
     target_sentence = request.form.get('target_sentence')     
     question_number = request.form.get('question_number') 
     uploaded_files = request.files.getlist("images")
@@ -847,7 +781,7 @@ def predict_handwriting_sentence():
     if user_id and target_sentence and uploaded_files:
         try:
             db = get_db()
-            # Updated collection path to 'Level_4' as per Question 17 requirements
+        
             doc_ref = db.collection('Assessment_Test') \
                         .document(user_id) \
                         .collection('Level_4') \
@@ -859,13 +793,13 @@ def predict_handwriting_sentence():
             detected_errors = []
 
             for i, file in enumerate(uploaded_files):
-                # Guard against more files than expected characters
+             
                 if i >= len(expected_chars): 
                     break
 
                 expected_char = expected_chars[i]
                 
-                # Process image for the AI model
+              
                 img = Image.open(file.stream).convert("RGB")
                 if expected_char.lower() in ['a', 'i', 'g', 'r','w']:
                     pred_response = g_handler_letter(img)
@@ -874,7 +808,7 @@ def predict_handwriting_sentence():
                 model_predict=pred_response 
                 
                 model_predict = ""
-                # Extract the character string from the model's response dictionary
+           
                 if isinstance(pred_response, dict) and 'prediction' in pred_response:
                     for x in pred_response['prediction']:
                         if isinstance(x, str):
@@ -884,8 +818,7 @@ def predict_handwriting_sentence():
                 
                 print(f"Index {i}: Expected '{expected_char}' vs Predicted '{model_predict}'")
 
-                # --- COMPARISON LOGIC ---
-                # Match character by character (case-insensitive)
+                
                 if model_predict.lower() != expected_char.lower():
                     if model_predict.lower() != expected_char.lower():
                         if ((expected_char.lower()=='o' and (str(model_predict) =='O_caps' or str(model_predict)=='0')) or (expected_char.lower()=='s' and (str(model_predict) =='S_caps' or str(model_predict)=='5')) or (expected_char.lower()=='w' and str(model_predict) =='W_caps') or
@@ -895,16 +828,16 @@ def predict_handwriting_sentence():
                             (expected_char=='g' and str(model_predict)=='9')or
                             (expected_char=='m' and str(model_predict)=='n')):
                             continue
-                        # Record the error
+                    
                         else:
                             error_msg =expected_char
                             detected_errors.append(error_msg)
 
-            # --- DATABASE UPDATE ---
+        
             if detected_errors:
                 print(f"Errors Found in Sentence: {detected_errors}")
                 
-                # Mark as Incorrect and store specific character errors
+              
                 doc_ref.set({
                     'Question Number': int(question_number),
                     'Answer': 'Incorrect',
@@ -916,7 +849,7 @@ def predict_handwriting_sentence():
                 print("UPDATED FIRESTORE")
                 return "Sentence Checked with Errors", 200
             else:
-                # Mark as Correct if all characters matched
+               
                 doc_ref.set({
                     'Question Number': int(question_number),
                     'Answer': 'Correct',
@@ -931,16 +864,15 @@ def predict_handwriting_sentence():
 
     return "Missing Data", 400
 
-#question19 
 @app.route('/transcribe_and_score1', methods=['POST'])
 def transcribe_and_score1():
     if 'audio' not in request.files or 'target_word' not in request.form:
         return jsonify({"error": "Missing audio file or target_word"}), 400
     
     user_id = request.form.get('user_id')
-    # target_word is the full sentence (e.g., "The cat is big")
+   
     target_sentence = request.form['target_word'].lower().strip()
-    # Clean target sentence for word splitting
+
     target_words = re.sub(r'[^\w\s]', '', target_sentence).split()
     
     question_number = request.form.get('question_number', '19')
@@ -951,13 +883,11 @@ def transcribe_and_score1():
     file.save(filepath)
     
     try:
-        # 1. Transcribe the full sentence
         audio = whisperx.load_audio(filepath)
-        # Using batch_size=8 for faster sentence processing
+        
         result = model.transcribe(audio, batch_size=8, language="en") 
         os.remove(filepath)
         
-        # 2. Extract and clean the AI's transcription
         raw_text = " ".join([segment["text"] for segment in result["segments"]]).strip().lower()
         print(f"--- Q{question_number} Assessment ---")
         print(f"Target: {target_sentence}")
@@ -966,31 +896,25 @@ def transcribe_and_score1():
         heard_text_clean = re.sub(r'[^\w\s]', '', raw_text)
         heard_words = heard_text_clean.split()
         
-        # 3. WORD-BY-WORD POSITIONAL COMPARISON
         detected_errors = []
         
-        # Iterate through target words to maintain strict order
         for i, target_w in enumerate(target_words):
             if i < len(heard_words):
                 heard_w = heard_words[i]
                 similarity = jellyfish.jaro_winkler_similarity(target_w, heard_w)
                 print(f"Pos {i}: [{target_w}] vs [{heard_w}] -> Sim: {similarity:.2f}")
                 
-                # If similarity is too low (< 0.65), it's a specific word error
                 if similarity < 0.65:
                     detected_errors.append(target_w)
             else:
-                # User stopped talking or AI missed the word at the end
                 detected_errors.append(target_w)
 
-        # 4. Final Result Logic
         is_fully_correct = len(detected_errors) == 0
 
-        # 5. Database Update (Firestore)
         if user_id:
             try:
                 db = get_db()
-                # Determine level based on question number
+
                 level ="Level_4"
                 doc_ref = db.collection('Assessment_Test') \
                             .document(user_id) \
@@ -998,7 +922,7 @@ def transcribe_and_score1():
                             .document(str(question_number))
                 
                 if not is_fully_correct:
-                    # Store as Incorrect with specific word errors
+
                     doc_ref.set({
                         'Question Number': int(question_number),
                         'Answer': 'Incorrect',
@@ -1006,13 +930,12 @@ def transcribe_and_score1():
                         'Transcribed': raw_text
                     }, merge=True)
                     
-                    # Store only the specific words that were wrong
+
                     doc_ref.update({
                         'Error': firestore.ArrayUnion(detected_errors)
                     })
                     print(f"(DEBUG) Incorrect stored for Q{question_number}. Errors: {detected_errors}")
                 else:
-                    # Store as Correct
                     doc_ref.set({
                         'Question Number': int(question_number),
                         'Answer': 'Correct',
@@ -1043,8 +966,7 @@ def get_common_errors(user_id):
         db = get_db()
         analytics_payload = []
         
-        # Define the dynamic mapping structure across all active scopes
-        # Format: (Firestore Top-Level Collection, UI Source Category Name)
+       
         collection_scopes = [
             ('Assessment_Test', 'Initial Assessment'),
             ('Level', 'Therapy Practice'),
@@ -1053,36 +975,35 @@ def get_common_errors(user_id):
         
         levels = ["Level_1", "Level_2", "Level_3", "Level_4"]
 
-        # 1. Iterate through distinct learning modes
+       
         for db_collection, ui_category in collection_scopes:
             for level_name in levels:
-                # Target collection path: Scope -> User -> Level Subcollection
+               
                 sub_ref = db.collection(db_collection).document(user_id).collection(level_name)
                 
-                # Fetch documents where the child struggled
-                # Note: Adjust the .where() clause if practice nodes track failures differently (e.g., success_count == 0)
+               
                 if db_collection == 'Assessment_Test':
                     docs = sub_ref.where("Answer", "==", "Incorrect").stream()
                 else:
-                    # Generic stream for active practice levels tracking lingering errors
+                 
                     docs = sub_ref.stream()
 
                 for doc in docs:
                     data = doc.to_dict() or {}
                     
-                    # Safely extract stored ArrayUnion error parameters
+                 
                     raw_errors = data.get('Error', [])
                     if not isinstance(raw_errors, list):
                         raw_errors = [str(raw_errors)] if raw_errors else []
                         
-                    # Filter out empty records or system flags
+                   
                     clean_concepts = [str(e).strip() for e in raw_errors if str(e).strip()]
                     
-                    # Skip rendering if this specific node has been entirely mastered/cleared
+                   
                     if not clean_concepts:
                         continue
 
-                    # Construct readable layout titles mapping educational domain indicators
+                   
                     q_num = data.get('Question Number', doc.id)
                     domain_indicator = ""
                     if level_name == "Level_1": domain_indicator = "Spatial Orientation"
@@ -1092,7 +1013,7 @@ def get_common_errors(user_id):
 
                     level_title = f"{level_name.replace('_', ' ')}: {domain_indicator} (Q{q_num})"
 
-                    # Emit structural format perfectly aligned with GSON serializable parameters
+                   
                     analytics_payload.append({
                         "source_category": ui_category,
                         "level_title": level_title,
@@ -1106,118 +1027,21 @@ def get_common_errors(user_id):
         return jsonify({"error": "Internal analytics compilation engine failed"}), 500
 
 
-# #Home Sceen Popup
-# @app.route('/api/scores/<user_id>', methods=['GET'])
-# def get_user_scores(user_id):
-#     try:
-#         db = get_db()
-        
-#         # --- CHECK IF ASSESSMENT IS COMPLETED ---
-#         user_profile_ref = db.collection('users').document(user_id)
-#         user_profile_doc = user_profile_ref.get()
-        
-#         if not user_profile_doc.exists:
-#             return jsonify({"status": "error", "message": "User profile not found."}), 404
-            
-#         user_data = user_profile_doc.to_dict()
-#         has_completed = user_data.get('hasCompletedAssessment', True)
-        
-#         # If  haven't finished, return an empty list 
-#         if not has_completed:
-#             return jsonify({"status": "success", "data": []}), 200
-
-#         # ---  CALCULATE SCORES ---
-#         assessment_ref = db.collection('Assessment_Test').document(user_id)
-        
-#         scores_summary = []
-
-        
-#         level_totals = {
-#             'Level_1': 5,
-#             'Level_2': 5,
-#             'Level_3': 5,
-#             'Level_4': 4
-#         }
-
-#         # Loop through every expected level
-#         for level_name, total_questions in level_totals.items():
-            
-       
-#             collection_ref = assessment_ref.collection(level_name)
-            
-#             # Count the number of error documents
-            
-#             errors_made = len(list(collection_ref.stream()))
-            
-#             # Calculate correct answers
-#             correct_answers = max(0, total_questions - errors_made)
-            
-#             scores_summary.append({
-#                 "level": level_name,
-#                 "score": f"{correct_answers}/{total_questions}"
-#             })
-#         quiz2_ref = db.collection('Quiz') \
-#             .document(user_id) \
-#             .collection('Quiz 2')
-
-#         quiz2_docs = list(quiz2_ref.stream())
-
-#         quiz2_total = 5  
-
-#         quiz2_errors = len(quiz2_docs)
-#         quiz2_correct = max(0, quiz2_total - quiz2_errors)
-#         scores_summary.append({
-#             "level": "Quiz_2",
-#             "score": f"{quiz2_correct}/{quiz2_total}"
-#         })
-
-#         level2_therapy_ref = db.collection('Level') \
-#         .document(user_id) \
-#         .collection('Level 2')
-
-#         level2_docs = list(level2_therapy_ref.stream())
-
-#         level2_empty = len(level2_docs) == 0
-#         print(level2_empty)
-#         level2_therapy_ref = db.collection('Level') \
-#         .document(user_id) \
-#         .collection('Level 2')
-
-#         level2_docs = list(level2_therapy_ref.stream())
-
-#         level2_empty = len(level2_docs) == 0
-#         print(level2_empty)
-
-#         return jsonify({"status": "success", "data": scores_summary, "Level2_Empty":level2_empty}), 200
-
-#     except Exception as e:
-#         print(f"Flask API Error: {e}")
-#         return jsonify({"status": "error", "message": str(e)}), 500
-
-
-
-#===========================LEVEL HANDLING=================================
-#=========================
-#=========================#
 from typecast import Typecast
 from typecast.models import TTSRequest
 import random
 
-# 1. Initialize the Typecast client
-# REPLACE THIS WITH YOUR REAL API KEY FROM THE DASHBOARD
 typecast_client = Typecast(api_key="__pltGcPSWdfiN4gPgxUwh2tFx4Efzw4wWCex4s3yCDQ8") 
-CHARACTER_ID = "tc_645b39b760386589fd851133" # Your Doraemon-like character
+CHARACTER_ID = "tc_645b39b760386589fd851133" 
 
 CARTOON_VOICE_MAP = {
     "doraemon":"tc_645b39b760386589fd851133",
-    "mickey": "tc_67db753311833db994c4fed7", # Your current Doraemon/Mickey voice
-    "pooh": "tc_67db753311833db994c4fed7",       # TODO: Add your Typecast ID here
-    "tom": "tc_660e5c11eef728e75f95f520",         # TODO: Add your Typecast ID here
-    "duffy": "tc_replace_with_duffy_id"      # TODO: Add your Typecast ID here
+    "mickey": "tc_67db753311833db994c4fed7", 
+    "pooh": "tc_67db753311833db994c4fed7",      
+    "tom": "tc_660e5c11eef728e75f95f520",     
+    "duffy": "tc_replace_with_duffy_id"    
 }
 
-# 2. Ensure the audio directory exists on server startup
-# Ensure the audio directory is securely mapped within your static folder
 AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'audio')
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
@@ -1234,13 +1058,12 @@ def generate_typecast_audio(text, filename, cartoon_name="doraemon"):
         for pattern, full_form in direction_map.items():
             spoken_text = re.sub(pattern, full_form, spoken_text, flags=re.IGNORECASE)
 
-        # Look up the specific voice ID, default to Mickey if not found
         voice_id = CARTOON_VOICE_MAP.get(cartoon_name.lower(), CARTOON_VOICE_MAP["mickey"])
 
         response = typecast_client.text_to_speech(TTSRequest(
             text=spoken_text,
             model="ssfm-v30",
-            voice_id=voice_id # ---> DYNAMIC VOICE INJECTED HERE <---
+            voice_id=voice_id 
         ))
 
         filepath = os.path.join(AUDIO_DIR, filename)
@@ -1254,8 +1077,6 @@ def generate_typecast_audio(text, filename, cartoon_name="doraemon"):
         print(f"(ERROR) Failed to generate Typecast audio: {e}")
 
 def get_or_generate_audio(text, base_filename, cartoon_name="doraemon"):
-    # ---> CACHE COLLISION FIX: Append the character name to the file! <---
-    # Turns "l4_slot1.wav" into "l4_slot1_mickey.wav"
     name, ext = os.path.splitext(base_filename)
     dynamic_filename = f"{name}_{cartoon_name.lower()}{ext}"
     
@@ -1272,39 +1093,30 @@ def ensure_word_audio_exists(word, cartoon_name="doraemon"):
     return get_or_generate_audio(word.strip().capitalize(), filename, cartoon_name)
 
 def ensure_standalone_word_audio(word):
-    """
-    Guarantees the existence of hardcoded frontend UI audio files.
-    Bypasses dynamic character suffixes so the Android app can find them via its hardcoded URL.
-    Checks local storage first to prevent wasting Typecast API quota.
-    """
+
     clean_word = word.strip().lower()
     filename = f"cached_word_v2_{clean_word}.wav"
     filepath = os.path.join(AUDIO_DIR, filename)
     
     if not os.path.exists(filepath):
         print(f"(INFO) Standalone word missing for UI: {word}. Generating once...")
-        # Force generation using default voice, saving to the hardcoded filename
         generate_typecast_audio(word.strip().upper(), filename, "doraemon")
 
 SLOT_CONFIGS = {
     1: {"type": "DRAWING", "prefix": "Draw the arrow"},
-    2: {"type": "MCQ",     "prefix": "Click the"},     # Strictly MCQ
+    2: {"type": "MCQ",     "prefix": "Click the"},     
     3: {"type": "MCQ", "prefix": "Click the direction of given arrow ?"},
     4: {"type": "MCQ", "prefix":"Match the arrow to the correct word"},
 }
 
 def get_user_cartoon_preference(user_id):
-    """
-    Fetches the user's preferred cartoon helper from Firestore.
-    Defaults to 'mickey' if the document or field does not exist.
-    """
+    
     try:
         db = get_db()
-        # Adjust 'Users' to match your actual user profile collection name
+
         user_doc = db.collection('cartoon_selection').document(user_id).get()
         if user_doc.exists:
             data = user_doc.to_dict() or {}
-            # Ensure safe fallback to 'mickey'
             return data.get('cartoon', 'mickey').lower().strip()
     except Exception as e:
         print(f"Error fetching cartoon preference for {user_id}: {e}")
@@ -1324,10 +1136,9 @@ def init_level_session():
         session_questions = []
         MASTERY_THRESHOLD = 3 
 
-        # Fetch the user's dynamic cartoon selection once at session start
         user_cartoon = get_user_cartoon_preference(user_id)
 
-        # ---> REMOVED THE WASTEFUL PRE-CACHING LOOP HERE <---
+     
         
         all_directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
         for direction in all_directions:
@@ -1340,7 +1151,6 @@ def init_level_session():
         is_graduated = meta_data.get('graduated', False)
         has_imported_assessment = meta_data.get('Assessment_Imported', False)
 
-        # 1. SCAN ACTIVE THERAPY TARGET POOL
         active_error_pool = []
         imported_any_new = False
         
@@ -1382,7 +1192,6 @@ def init_level_session():
             meta_ref.set({'Assessment_Imported': True}, merge=True)
             has_imported_assessment = True
 
-        # 2. GRADUATION EVALUATION LOGIC
         if not active_error_pool and not is_graduated:
             meta_ref.set({
                 'graduated': True,
@@ -1392,13 +1201,12 @@ def init_level_session():
             
             return jsonify({
                 "status": "success",
-                "cartoon_selection": user_cartoon, # Inject selection here
+                "cartoon_selection": user_cartoon, 
                 "total_questions": 0,
                 "maintenance_mode": False,
                 "questions": []
             }), 200
 
-        # 3. MAINTENANCE MODE GENERATOR
         if is_graduated and not active_error_pool:
             directions = ["Up", "Down", "Left", "Right", "NE", "NW", "SE", "SW"]
             rand_dir = random.choice(directions)
@@ -1422,7 +1230,7 @@ def init_level_session():
                 audio_filename = f"cached_identify_{clean_word}.wav"
                 mapped_type = "MCQ"
                 mapped_slot = 3  
-            else: # MCQ_MATCH
+            else: 
                 rand_dir = random.choice(["Up", "Down", "Left", "Right"])
                 clean_word = rand_dir.lower()
                 instruction_text = "Match the arrow to the correct word"
@@ -1430,12 +1238,12 @@ def init_level_session():
                 mapped_type = "MCQ"
                 mapped_slot = 4
 
-            # ---> FIX: Passed user_cartoon here so maintenance mode sounds right <---
+        
             audio_url = get_or_generate_audio(instruction_text, audio_filename, user_cartoon)
 
             return jsonify({
                 "status": "success",
-                "cartoon_selection": user_cartoon, # Inject selection here
+                "cartoon_selection": user_cartoon, 
                 "total_questions": 1,
                 "maintenance_mode": True,
                 "questions": [{
@@ -1448,7 +1256,6 @@ def init_level_session():
                 }]
             }), 200
 
-        # 4. STANDARD THERAPY MODE COMPILATION
         random.shuffle(active_error_pool)
         available_ui_slots = sorted(list(SLOT_CONFIGS.keys()))
         
@@ -1486,10 +1293,9 @@ def init_level_session():
                 "audio_url": audio_url
             })
 
-        # Return final compilation payload including the parsed helper profile string
         return jsonify({
             "status": "success",
-            "cartoon_selection": user_cartoon, # Inject selection here
+            "cartoon_selection": user_cartoon,
             "total_questions": len(session_questions),
             "maintenance_mode": False,
             "questions": session_questions
@@ -1517,7 +1323,6 @@ def predict_therapy_direction():
         model_prediction = direction_predict(img)
         is_correct = (model_prediction.strip().lower() == target_word.strip().lower())
         
-        # Calls the handler to update counters or purge the document
         _, mastery_status = update_therapy_progress(
             user_id=user_id,
             target_word=target_word,
@@ -1539,14 +1344,12 @@ def predict_therapy_direction():
 
 
 
-# --- GET ROUTE FOR Q2 DYNAMIC MCQ ---
 @app.route('/verify_therapy_mcq', methods=['POST'])
 def verify_therapy_mcq():
     user_id = request.form.get('user_id')
     target_word = request.form.get('target_word')
     arrow_selected = request.form.get('arrow_selected')
     
-    # Crucial: Reads the actual database document ID passed from the session array
     question_number = request.form.get('question_number', '2')
 
     if not all([user_id, target_word, arrow_selected]):
@@ -1555,7 +1358,6 @@ def verify_therapy_mcq():
     try:
         is_correct = (arrow_selected.strip().lower() == target_word.strip().lower())
         
-        # Increments counters or purges the document if the mastery threshold is reached
         _, mastery_status = update_therapy_progress(
             user_id=user_id,
             target_word=target_word,
@@ -1579,7 +1381,6 @@ def verify_therapy_mcq():
 
 
 
-# --- POST ROUTE TO VERIFY Q3 SELECTION ---
 @app.route('/verify_therapy_q3', methods=['POST'])
 def verify_therapy_q3():
     user_id = request.form.get('user_id')
@@ -1614,7 +1415,6 @@ def verify_therapy_q3():
         return jsonify({"error": "Internal server error"}), 500
 
 
-# --- POST ROUTE TO VERIFY Q4 SELECTION ---
 @app.route('/verify_therapy_q4', methods=['POST'])
 def verify_therapy_q4():
     user_id = request.form.get('user_id')
@@ -1648,7 +1448,6 @@ def verify_therapy_q4():
         print(f"(ERROR) /verify_therapy_q4 failed:\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error"}), 500
 
-#QUIZ1
 @app.route('/generate_quiz1', methods=['GET'])
 def generate_quiz1():
     user_id = request.args.get('user_id')
@@ -1658,7 +1457,6 @@ def generate_quiz1():
     try:
         quiz_questions = []
         
-        # Pre-cache single word audio execution parameters securely
         cardinal_dirs = ["Up", "Down", "Left", "Right"]
         combined_dirs = ["NE", "NW", "SE", "SW","Up","Down","Left","Right"]
         
@@ -1667,23 +1465,19 @@ def generate_quiz1():
 
         target_slots = [1, 2, 3, 4]
         
-        # Shuffle independent option sets
         random.shuffle(cardinal_dirs)
         random.shuffle(combined_dirs)
 
         for index, slot_num in enumerate(target_slots):
-            # Enforce strict assignment logic:
-            # Slot 1 (Drawing) consumes pure cardinal parameters to guarantee ML classification safety.
-            # Subsequent interactive UI configurations pull from the full spatial matrix.
+            
             if slot_num == 1:
-                target_word = cardinal_dirs[0] # Guaranteed Cardinal Root
+                target_word = cardinal_dirs[0] 
             elif slot_num==3:
-                # Rotates targets cleanly across the combined direction list
+              
                 target_word = combined_dirs[index - 1] 
                 
             clean_word = target_word.lower()
 
-            # Dynamic string formatting mapped per layout specifications
             if slot_num == 1:
                 q_type = "DRAWING"
                 instruction_text = f"Draw the arrow {target_word}"
@@ -1694,10 +1488,9 @@ def generate_quiz1():
                 audio_filename = f"cached_quiz_click_{clean_word}.wav"
             elif slot_num == 3:
                 q_type = "MCQ"
-                # Stage 3 uses the rotated icon display, prompting standard conceptual extraction
                 instruction_text = "Click the direction of the given arrow"
                 audio_filename = f"cached_identify_v2_down.wav"
-            else: # Slot 4
+            else: 
                 q_type = "MCQ"
                 instruction_text = "Match the arrow to the correct word"
                 audio_filename = f"cached_match_v2_left.wav"
@@ -1742,7 +1535,6 @@ def evaluate_quiz1_batch():
         correct_count = 0
         failed_concepts = []
 
-        # Iterate over submitted sequence entries
         for meta in metadata_list:
             q_index = meta['question_index']
             target_word = meta['target_word']
@@ -1756,25 +1548,21 @@ def evaluate_quiz1_batch():
                 if file_key in request.files:
                     image_file = request.files[file_key]
                     
-                    # ---> FIXED: Safely open byte stream into Pillow RGB Image matching standard routes <---
                     img = Image.open(image_file.stream).convert("RGB")
                     
-                    # Execute active computer vision direction validation
+         
                     prediction = direction_predict(img) 
                     if prediction.strip().lower() == target_word.strip().lower():
                         is_correct = True
             elif q_type == "MCQ":
                 file_key = f"file_{q_index}"
                 if file_key in request.files:
-                    # Reads the transmitted selection string payload directly from the file buffer
                     selection_bytes = request.files[file_key].read()
                     selected_arrow = selection_bytes.decode('utf-8').strip()
                     
-                    # Compares decoded user click straight against absolute DB concepts
                     if selected_arrow.lower() == target_word.strip().lower():
                         is_correct = True
             else:
-                # Fallback validation logic for supplementary question formats (MCQ, Matching)
                 is_correct = True
 
             if is_correct:
@@ -1785,11 +1573,9 @@ def evaluate_quiz1_batch():
                     "concept": target_word.strip().capitalize()
                 })
 
-        # Calculate final percentage distribution
         score_ratio = (correct_count / total_questions) * 100 if total_questions > 0 else 0
-        is_eligible_for_level_2 = score_ratio >= 75.0  # Pass threshold mapping set to 75%
+        is_eligible_for_level_2 = score_ratio >= 75.0  
 
-        # 1. WRITE TO QUIZ TRACKING TABLE
         quiz_ref = db.collection('Quiz').document(user_id).collection('Quiz 1').document('Score')
         quiz_ref.set({
             'score': correct_count,
@@ -1799,18 +1585,15 @@ def evaluate_quiz1_batch():
             'timestamp': firestore.SERVER_TIMESTAMP
         }, merge=True)
 
-        # 2. WRITE TO LEVEL 2 ACCESS PERMISSION NODE
         meta_ref = db.collection('Level').document(user_id).collection('Level_1').document('meta_status')
         meta_ref.set({
             'unlocked_level_2': is_eligible_for_level_2
         }, merge=True)
 
-        # 3. WRITE IDENTIFIED ERRORS BACK TO LEVEL 1 PRACTICE POOLS
         for err_item in failed_concepts:
             slot_id = str(err_item['slot'])
             active_practice_ref = db.collection('Level').document(user_id).collection('Level_1').document(slot_id)
             
-            # Reset success counters to trigger priority spatial retraining
             active_practice_ref.set({
                 'Question Number': err_item['slot'],
                 'Error': [err_item['concept']],
@@ -1830,9 +1613,6 @@ def evaluate_quiz1_batch():
 
 
 
-#----------------LEVEL 4------------------
-#----------------------------------------
-
 import pandas as pd
 from werkzeug.utils import secure_filename
 
@@ -1842,7 +1622,6 @@ import re
 import traceback
 import pandas as pd
 
-# --- 1. PANDAS CSV MINING ENGINE (VARIABLE LENGTH / STRICTLY UNIQUE) ---
 def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
     try:
         base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -1854,7 +1633,6 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
         df = pd.read_csv(csv_path, header=None, names=['raw_text'])
         df = df.dropna()
         
-        # Aggressive space normalization to protect downstream UI drawing box allocation
         df['raw_text'] = df['raw_text'].astype(str).apply(lambda x: " ".join(x.split()))
         
         valid_errors = [str(w).strip().lower() for w in error_list if str(w).strip()]
@@ -1864,7 +1642,6 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
         results = []
         used_sentences = set() 
         
-        # We attempt to reach max_count, but allow early exits if data is sparse
         for i in range(max_count):
             target_word = valid_errors[i % len(valid_errors)]
             
@@ -1874,26 +1651,22 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
             def count_boxes(text):
                 return sum(1 for c in text if c.isalnum())
             
-            # --- 1. Primary Scan: Strict standalone word boundaries ---
             pattern = r'\b' + re.escape(target_word) + r'\b'
             matches = df[df['raw_text'].str.lower().str.contains(pattern, regex=True)]
             
-            # --- 2. Secondary Scan: Standard Substring matching ---
             if matches.empty:
                 matches = df[df['raw_text'].str.lower().str.contains(re.escape(target_word), regex=True)]
             
-            # Apply task-specific constraints
             if mode == "GRID_SELECT":
                 valid_matches = matches
             elif mode == "VOICE":
                 valid_matches = matches[matches['raw_text'].apply(count_words) >= 3]
-            else: # WRITING / COMBO strict drawing constraints
+            else:
                 valid_matches = matches[
                     (matches['raw_text'].apply(count_words) >= 2) & 
                     (matches['raw_text'].apply(count_boxes) <= 16)
                 ]
             
-            # --- 3. Ultimate Fuzzy Fallback: Gather a Multi-Sample Pool ---
             if valid_matches.empty:
                 print(f"(WARN) '{target_word}' missing exact match. Executing Jaro-Winkler multi-sample scan...")
                 fallback_candidates = []
@@ -1914,20 +1687,17 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
                 if fallback_candidates:
                     valid_matches = pd.DataFrame(fallback_candidates, columns=['raw_text'])
                 else:
-                    valid_matches = df # Ultimate absolute failsafe
+                    valid_matches = df 
 
-            # --- STRICT GLOBAL DEDUPLICATION ---
             available = valid_matches[~valid_matches['raw_text'].isin(used_sentences)]
             
-            # ---> CRITICAL FIX: If no unique sentences remain, STOP sampling and exit early <---
             if available.empty:
                 print(f"(INFO) Exhausted unique contexts for '{target_word}'. Halting extraction at {len(results)} items.")
                 break 
 
             sampled_sentence = available.sample(n=1)['raw_text'].values[0]
             used_sentences.add(sampled_sentence)
-            
-            # --- Output Construction & Sanitization ---
+      
             if mode == "GRID_SELECT":
                 all_words = " ".join(df['raw_text'].values).split()
                 distractors = random.sample(all_words, 23)
@@ -1943,7 +1713,6 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
                 "sentence": final_string
             })
             
-        # Fallback security: guarantee we return at least 1 valid item if everything failed entirely
         if not results:
             results.append({"word": valid_errors[0].capitalize(), "sentence": f"Practice the word {valid_errors[0]}"})
             
@@ -1955,7 +1724,6 @@ def get_l4_targets_from_csv(error_list, max_count=3, mode="VOICE"):
         return [{"word": "Fallback", "sentence": "System loaded a default string"}]
 
 
-# --- 3. LEVEL 4 INITIALIZATION ROUTE (STRICT SEQUENTIAL MULTIMODAL ORDER) ---
 @app.route('/init_level4_session', methods=['GET'])
 def init_level4_session():
     user_id = request.args.get('user_id')
@@ -1967,7 +1735,6 @@ def init_level4_session():
         session_questions = []
         MASTERY_THRESHOLD = 3 
 
-        # 1. Fetch User Character Preference
         user_cartoon = get_user_cartoon_preference(user_id)
 
         meta_ref = db.collection('Level').document(user_id).collection('Level_4').document('meta_status')
@@ -1984,7 +1751,6 @@ def init_level4_session():
         active_error_pool = []
 
         if not is_graduated:
-            # Scan exactly for absolute sequential database keys (16, 17, 18, 19)
             for q_num in range(16, 20):
                 doc_id = str(q_num)
                 active_ref = db.collection('Level').document(user_id).collection('Level_4').document(doc_id)
@@ -2023,16 +1789,13 @@ def init_level4_session():
                         "errors": error_list_payload
                     })
 
-            # ---> FIX: GRADUATE WITHOUT RECURSION <---
             if len(active_error_pool) == 0:
                 meta_ref.set({'graduated': True}, merge=True)
                 is_graduated = True
 
-        # --- MAINTENANCE MODE (Now safely evaluated AFTER graduation check) ---
         if is_graduated:
             mini_q_data = get_l4_targets_from_csv(dummy_errors, max_count=3, mode="VOICE")
             instruction = "Read the sentence out loud"
-            # Pass user_cartoon to get the correct voice
             audio_url = get_or_generate_audio(instruction, "l4_maint_sentence.wav", user_cartoon)
             
             return jsonify({
@@ -2050,7 +1813,6 @@ def init_level4_session():
                 }]
             }), 200
 
-        # Build the final payload for standard therapy
         for error_obj in active_error_pool:
             db_num = error_obj["original_db_slot"]
             current_error_array = error_obj["errors"]
@@ -2063,7 +1825,6 @@ def init_level4_session():
             mini_q_data = get_l4_targets_from_csv(current_error_array, max_count=3, mode=q_type)
              
             clean_audio_name = f"l4_slot{ui_slot}.wav"
-            # Pass user_cartoon down here as well!
             audio_url = get_or_generate_audio(instruction, clean_audio_name, user_cartoon)
 
             session_questions.append({
@@ -2088,10 +1849,7 @@ def init_level4_session():
         return jsonify({"error": "Failed to initialize Level 4 session"}), 500
 @app.route('/verify_l4_q1_voice', methods=['POST'])
 def verify_l4_q1_voice():
-    """
-    Receives spoken audio payloads, transcribes the string using WhisperX, 
-    and applies Jaro-Winkler phonetic token evaluation against the active target key.
-    """
+    
     if 'audio' not in request.files or 'target_sentence' not in request.form:
         return jsonify({"error": "Missing audio or target_sentence payload"}), 400
         
@@ -2107,7 +1865,6 @@ def verify_l4_q1_voice():
     
     try:
         audio = whisperx.load_audio(filepath)
-        # Lock transcription strictly to English to prevent short-audio hallucinations
         result = model.transcribe(audio, batch_size=8, language="en") 
         os.remove(filepath)
         
@@ -2120,23 +1877,19 @@ def verify_l4_q1_voice():
         print(f"(DEBUG WHISPERX) Spoken Audio   : '{clean_transcribed}'")
         print("="*50 + "\n")
         
-        # --- PHONETIC TOKEN EVALUATION ---
         transcribed_tokens = clean_transcribed.split()
         best_token_score = 0.0
         matched_token = ""
         
-        # Jaro-Winkler handles slight mispronunciations or accent shifts gracefully
         for token in transcribed_tokens:
             score = jellyfish.jaro_winkler_similarity(target_word, token)
             if score > best_token_score:
                 best_token_score = score
                 matched_token = token
                 
-        # 0.80 threshold allows passing scores for structurally valid phonetic variations
         print(f"Similarity sentence for {target_word} is {best_token_score}")
         is_correct = bool(best_token_score >= 0.65)
         
-        # Instantly update local database progression maps
         _, mastery = update_therapy_progress_l4(user_id, target_word, is_correct, question_number)
             
         return jsonify({
@@ -2157,7 +1910,6 @@ def verify_l4_q1_voice():
 
 
 
-# --- LEVEL 4 DYNAMIC WRITING VERIFICATION ROUTE (AUTOMATIC CAPS NORMALIZATION) ---
 @app.route('/verify_l4_q2_writing', methods=['POST'])
 def verify_l4_q2_writing():
     user_id = request.form.get('user_id')
@@ -2199,16 +1951,13 @@ def verify_l4_q2_writing():
             else:
                 model_predict = str(pred_response)
                 
-            # ---> CRITICAL FIX: Global Label Normalization for AI Classifiers <---
-            # Automatically strip off any structural "_caps" suffixes to isolate the pure base letter
-            # Maps labels like "C_caps" directly to "c", entirely preventing broken string mashes.
+          
             if model_predict.lower().endswith("_caps"):
                 model_predict = model_predict.split("_")[0]
 
             clean_pred = model_predict.lower()
             clean_exp = expected_char.lower()
-            
-            # Legacy mapping checks retained for numbers and strict visual discrepancies
+           
             if clean_pred != clean_exp:
                 if ((clean_exp == 'o' and clean_pred == '0') or 
                     (clean_exp == 's' and clean_pred == '5') or 
@@ -2258,7 +2007,6 @@ def verify_l4_q2_writing():
         return jsonify({"error": f"Internal execution failure: {str(e)}"}), 500
 
 
-# --- LEVEL 4 ISOLATED VERIFICATION ENDPOINT (GRID VALIDATION) ---
 @app.route('/verify_l4_q3_grid', methods=['POST'])
 def verify_l4_q3_grid():
     user_id = request.form.get('user_id')
@@ -2271,7 +2019,6 @@ def verify_l4_q3_grid():
         return jsonify({"error": "Missing target_sentence payload"}), 400
         
     try:
-        # Parse submitted token answers securely
         selected_answers = json.loads(raw_answers_json)
         clean_answers = [re.sub(r'[^\w\s]', '', str(w)).strip().lower() for w in selected_answers if str(w).strip()]
         
@@ -2279,13 +2026,10 @@ def verify_l4_q3_grid():
         print(f"(DEBUG L4 GRID) Target Word Key : '{target_word}'")
         print(f"(DEBUG L4 GRID) Selected Tokens : {clean_answers}")
         print("="*50 + "\n")
-        
-        # --- INSTANT TOKEN EVALUATION ---
-        # 1. Count exactly how many times the target word appears in the sanitized grid pool
+    
         grid_pool_words = [w.strip().lower() for w in target_sentence.split()]
         total_targets_in_grid = grid_pool_words.count(target_word)
         
-        # 2. Track the user's correct vs. incorrect selection counts in real-time
         correct_clicks = 0
         incorrect_clicks = 0
         
@@ -2295,10 +2039,8 @@ def verify_l4_q3_grid():
             else:
                 incorrect_clicks += 1
         
-        # 3. Complete Verification: True ONLY if the user highlighted ALL targets and ZERO distractors
         is_correct = bool((correct_clicks == total_targets_in_grid) and (incorrect_clicks == 0))
         
-        # Instantly notify your parallel dictionary database updater
         _, mastery = update_therapy_progress_l4(user_id, target_word, is_correct, question_number)
         
 
@@ -2320,9 +2062,7 @@ def verify_l4_q3_grid():
 
 
 
-#---LEVEL 2--------------------
 
-# CARTOON SELECTION
 @app.route("/select_cartoon", methods=["POST"])
 def select_cartoon():
     user_id = request.form.get('user_id')
@@ -2363,7 +2103,6 @@ def select_cartoon():
             for ch in clean_word:
                 letters.append(ch.lower())
 
-        # Remove duplicates
         unique_letters = list(dict.fromkeys(letters))
         level2_ref = db.collection('Level') \
             .document(user_id) \
@@ -2377,10 +2116,8 @@ def select_cartoon():
         print("User id: ", user_id)
         print("User Errors: ", unique_letters)
         random_letters = random.sample(unique_letters, min(3, len(unique_letters)))
-        # All lowercase alphabets
         all_letters = list(string.ascii_lowercase)
 
-        # Find letters NOT already in random_letters
         remaining_letters = [ch for ch in all_letters if ch not in random_letters]
         extra_letters = random.sample(remaining_letters, 2)
         random_letters.extend(extra_letters)
@@ -2411,10 +2148,8 @@ def TherapyLevel2():
     
     db = get_db()
 
-    # 1. Fetch user's cartoon preference securely
     user_cartoon = get_user_cartoon_preference(user_id)
 
-    # 2. Extract active Level 2 Target Pool
     level2_ref = db.collection('Level') \
         .document(user_id) \
         .collection('Level 2')
@@ -2427,7 +2162,6 @@ def TherapyLevel2():
     
     print(letters_array)
     
-    # 3. Return unified structured JSON response payload
     return jsonify({
         "status": "success",
         "cartoon_selection": user_cartoon,
@@ -2451,7 +2185,6 @@ def decrement_therapylevel2_count(user_id,expected_Letter):
 
         print(f"{expected_Letter} count:", current_count)
 
-        #Decrement the count if current_count is not 0
         if current_count > 0:
 
             letter_ref.update({
@@ -2480,7 +2213,6 @@ def increment_therapylevel2_count(user_id,expected_Letter):
         current_count = updated_data.get("count", 0)
         print(f"{expected_Letter} count:", current_count)
 
-        # Delete document if count reaches 6
         if current_count >= 6:
             letter_ref.delete()
 
@@ -2515,7 +2247,6 @@ def predict_therapy_level2():
             for x in pred['prediction']:
                 if isinstance(x, str):
                     model_predict= x
-            # print(model_predict)
             if expected_Letter == 'p':
                 if model_predict not in ['p','P_caps']:
                     decrement_therapylevel2_count(user_id,expected_Letter)
@@ -2635,7 +2366,6 @@ def delete_quiz2_document(user_id,expected_Letter):
 
 
 
-#Quiz#2
 @app.route("/predict_quiz2",methods=['POST'])
 def predict_quiz2():
     user_id=request.form.get('user_id')
@@ -2662,7 +2392,7 @@ def predict_quiz2():
             for x in pred['prediction']:
                 if isinstance(x, str):
                     model_predict= x
-            # print(model_predict)
+           
             if expected_Letter == 'p':
                 if model_predict not in ['p','P_caps']:
                     
@@ -2731,19 +2461,12 @@ def predict_quiz2():
 
 
 
-
-
-#----LEVEL 3-----------------------
-
 _CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'DyslexiaDataSet.csv')
 def _load_csv_words():
-    """
-    Loads DyslexiaDataSet.csv and returns a cleaned list of unique lowercase
-    alpha-only words (length 2–8).  Called once at module load.
-    """
+   
     try:
         df = pd.read_csv(_CSV_PATH, encoding='latin-1')
-        col = df.columns[0]          # the only column is named 'apple'
+        col = df.columns[0]          
         raw = df[col].tolist()
         seen = set()
         cleaned = []
@@ -2751,7 +2474,7 @@ def _load_csv_words():
             if not isinstance(w, str):
                 continue
             w = w.strip().lower()
-            # keep only pure alpha words of reasonable length
+    
             if w.isalpha() and 2 <= len(w) <= 8 and w not in seen:
                 seen.add(w)
                 cleaned.append(w)
@@ -2764,47 +2487,21 @@ def _load_csv_words():
 CSV_WORDS = _load_csv_words()
  
  
-# =============================================================================
-# CORE HELPER: find_similar_words_from_csv
-#
-# Given an error_word (what the child got wrong in the assessment), return
-# `count` real words from the CSV that are therapeutically related:
-#
-#   Priority 1 — same rhyme ending (last 2 chars) AND same word length
-#                → closest phonetic neighbours
-#   Priority 2 — same rhyme ending (any length)
-#                → still rhymes, slightly looser
-#   Priority 3 — same first letter AND same word length
-#                → similar shape / onset confusion
-#   Priority 4 — same word length only
-#                → at least structurally similar
-#   Priority 5 — any short word from the CSV (last resort)
-#
-# The error_word itself is always INCLUDED in the result (child must practice
-# the exact word they struggled with), then padded with related words.
-# Duplicates are removed before returning.
-# =============================================================================
+
 def find_similar_words_from_csv(error_word, count=4, required_length=None):
-    """
-    Returns a deduplicated list of `count` CSV words most similar to error_word.
-    The error_word is always element [0] so it is always practised first.
-    """
+    
     error_word = str(error_word).strip().lower()
  
     if not CSV_WORDS:
-        # absolute fallback if CSV failed to load
         return [error_word] * count
  
-    # If a specific length is required (Q15 handwriting), use it; otherwise
-    # use the error word's own length as the preferred length.
     target_len = required_length if required_length else len(error_word)
     rhyme_key  = error_word[-2:] if len(error_word) >= 2 else error_word[-1:]
  
-    # Collect candidates by priority bucket
     p1, p2, p3, p4 = [], [], [], []
     for w in CSV_WORDS:
         if w == error_word:
-            continue  # we add the error_word separately below
+            continue  
         ends_same  = w.endswith(rhyme_key)
         len_same   = len(w) == target_len
         start_same = w[0] == error_word[0]
@@ -2818,13 +2515,11 @@ def find_similar_words_from_csv(error_word, count=4, required_length=None):
         elif len_same:
             p4.append(w)
  
-    # Shuffle each bucket so we don't always get the same subset
     random.shuffle(p1)
     random.shuffle(p2)
     random.shuffle(p3)
     random.shuffle(p4)
  
-    # Build result: error_word first, then fill from priority buckets
     result = [error_word]
     for pool in [p1, p2, p3, p4, CSV_WORDS]:
         for w in pool:
@@ -2837,35 +2532,21 @@ def find_similar_words_from_csv(error_word, count=4, required_length=None):
  
     return result[:count]
  
-
-# =============================================================================
-# HELPER: build_distractor_options_for_q11
-#
-# For Q11 (MCQ "circle the matching word"), each target word needs 2
-# plausible distractors.  Distractors are chosen from the CSV using the
-# typical dyslexia letter-reversal confusions (b↔d, p↔q, n↔u, was↔saw).
-# If no confusion variant exists in the CSV, we fall back to same-rhyme words.
-# =============================================================================
 _CONFUSION_MAP = {
     'b': 'd', 'd': 'b', 'p': 'q', 'q': 'p',
     'n': 'u', 'u': 'n', 'm': 'w', 'w': 'm',
 }
  
 def build_distractor_options_for_q11(target_word):
-    """
-    Returns a 3-element list: [target_word, distractor1, distractor2]
-    All distractors come from the CSV or are plausible reversals.
-    """
+   
     distractors = []
  
-    # 1. Try letter-reversal distractors that exist in the CSV
     for i, ch in enumerate(target_word):
         if ch in _CONFUSION_MAP:
             variant = target_word[:i] + _CONFUSION_MAP[ch] + target_word[i+1:]
             if variant in CSV_WORDS and variant not in distractors and variant != target_word:
                 distractors.append(variant)
  
-    # 2. Fill remaining slots with same-rhyme words from the CSV
     rhyme_key = target_word[-2:] if len(target_word) >= 2 else target_word[-1:]
     rhyme_pool = [
         w for w in CSV_WORDS
@@ -2874,7 +2555,6 @@ def build_distractor_options_for_q11(target_word):
     random.shuffle(rhyme_pool)
     distractors.extend(rhyme_pool)
  
-    # 3. Last resort: same-length words
     if len(distractors) < 2:
         length_pool = [
             w for w in CSV_WORDS
@@ -2888,15 +2568,7 @@ def build_distractor_options_for_q11(target_word):
     return options
  
  
-# =============================================================================
-# STEP 1+2: GET /get_personalized_question
-#
-# Step 1 — Check Level (user → Level_3 → Q#) for a stored error word.
-# Step 2 — If none found, fall back to Assessment_Test (user → Level_3 → Q#).
-# Step 3 — Use that error word with find_similar_words_from_csv() to build
-#           the therapy question content from the CSV.
-# Step 4 — Return to frontend.
-# =============================================================================
+
 @app.route('/get_personalized_question', methods=['GET'])
 def get_personalized_question():
     user_id = request.args.get('user_id')
@@ -2908,7 +2580,6 @@ def get_personalized_question():
     try:
         db = get_db()
         
-        # ---> RESOLVE COMPANION STATE ONCE AT INITIALIZATION <---
         user_cartoon = get_user_cartoon_preference(user_id)
  
         level_ref = (
@@ -2978,7 +2649,7 @@ def get_personalized_question():
  
         return jsonify({
             "status":           "success",
-            "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
+            "cartoon_selection": user_cartoon, 
             "question_number":  q_num,
             "instruction_text": instruction_text,
             "target_word":      error_word,
@@ -2989,17 +2660,9 @@ def get_personalized_question():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
- 
-# =============================================================================
-# STEP 4: process_therapy_submission  (shared helper)
-#
-#   WRONG  → store error_word in Level + increment Threshold_Count
-#   CORRECT→ remove the specific target_word from Level Error list.
-#            If no errors left, delete the document.
-# =============================================================================
+
 def process_therapy_submission(user_id, q_num, target_word, is_correct):
     db = get_db()
-    # Updated collection reference to 'Level'
     level_ref = (
         db.collection('Level')
           .document(user_id)
@@ -3014,11 +2677,9 @@ def process_therapy_submission(user_id, q_num, target_word, is_correct):
     if not is_correct:
         current_threshold = existing.get("Threshold_Count", 0) + 1
 
-        # Deduplicate error list and add the word
         if target_word not in existing_errors:
             existing_errors.append(target_word)
 
-        # Stores data directly into the 'Level' collection
         level_ref.set({
             'Question Number':  int(q_num),
             'Error':            existing_errors,
@@ -3028,25 +2689,20 @@ def process_therapy_submission(user_id, q_num, target_word, is_correct):
         print(f"(THERAPY) User={user_id} Q{q_num}: WRONG — '{target_word}' stored in Level. "
               f"Threshold={current_threshold}")
     else:
-        # If correct, remove the specific word that was just practiced
         if target_word in existing_errors:
             existing_errors.remove(target_word)
         
         if not existing_errors:
-            # If no more words left, delete doc from Level
             level_ref.delete()
             print(f"(THERAPY) User={user_id} Q{q_num}: CORRECT — All words mastered, doc deleted from Level.")
         else:
-            # Update the doc in Level with the word removed
+          
             level_ref.update({
                 'Error': existing_errors
             })
             print(f"(THERAPY) User={user_id} Q{q_num}: CORRECT — '{target_word}' removed from Level list.")
             
-# =============================================================================
-# POST /check_answers_therapy
-# Called by: QuestionL11 (MCQ), QuestionL13 (rhyme grid), QuestionL14 (spot word)
-# =============================================================================
+
 @app.route('/check_answers_therapy', methods=['POST'])
 def check_answers_therapy():
     try:
@@ -3067,12 +2723,7 @@ def check_answers_therapy():
         return jsonify({"status": "error", "message": str(e)}), 500
  
  
-# =============================================================================
-# POST /transcribe_and_score_therapy
-# Called by: QuestionL12 (read-aloud)
-# Uses WhisperX + Jaro-Winkler (same pipeline as the assessment endpoint)
-# then calls process_therapy_submission to update Level_Schema.
-# =============================================================================
+
 @app.route('/transcribe_and_score_therapy', methods=['POST'])
 def transcribe_and_score_therapy():
     if 'audio' not in request.files or 'target_word' not in request.form:
@@ -3088,25 +2739,21 @@ def transcribe_and_score_therapy():
     file.save(filepath)
  
     try:
-        # 1. Transcribe with WhisperX
         audio  = whisperx.load_audio(filepath)
         result = model.transcribe(audio, batch_size=8, language="en")
         os.remove(filepath)
  
-        # 2. Clean transcription and grab the last spoken word
         raw_text          = " ".join([s["text"] for s in result["segments"]]).strip().lower()
         transcribed_clean = re.sub(r'[^\w\s]', '', raw_text)
         words_spoken      = transcribed_clean.split()
         word_to_compare   = words_spoken[-1] if words_spoken else ""
  
-        # 3. Jaro-Winkler similarity
         similarity  = jellyfish.jaro_winkler_similarity(target_word, word_to_compare)
         is_correct  = bool(similarity >= 0.65)
  
         print(f"(THERAPY Q{q_num}) Target='{target_word}' | Heard='{word_to_compare}' "
               f"| Score={similarity:.2f} | Correct={is_correct}")
  
-        # 4. Update Level_Schema
         if user_id:
             process_therapy_submission(user_id, q_num, target_word, is_correct)
  
@@ -3123,11 +2770,7 @@ def transcribe_and_score_therapy():
         return jsonify({"error": str(e)}), 500
  
  
-# =============================================================================
-# POST /predict_handwriting_batch_therapy
-# Called by: QuestionL15 (handwriting)
-# Runs real letter_predict / g_handler_letter models, then updates Level_Schema.
-# =============================================================================
+
 @app.route("/predict_handwriting_batch_therapy", methods=['POST'])
 def predict_handwriting_batch_therapy():
     try:
@@ -3151,13 +2794,11 @@ def predict_handwriting_batch_therapy():
             expected_char = target_word[i]
             img = Image.open(file.stream).convert("RGB")
  
-            # Choose model based on letter (matches assessment endpoint logic)
             if expected_char.lower() in ['a', 'i', 'g', 'r']:
                 pred_response = g_handler_letter(img)
             else:
                 pred_response = letter_predict(img)
  
-            # Extract predicted string
             model_predict = str(pred_response)
             if isinstance(pred_response, dict) and 'prediction' in pred_response:
                 for x in pred_response['prediction']:
@@ -3166,7 +2807,6 @@ def predict_handwriting_batch_therapy():
  
             print(f"  [{i}] expected='{expected_char}' predicted='{model_predict}'")
  
-            # Compare — same special-case exceptions as the assessment endpoint
             if model_predict.lower() != expected_char.lower():
                 is_exception = (
                     (expected_char.lower() == 'o' and model_predict in ('O_caps', '0'))    or
@@ -3194,15 +2834,7 @@ def predict_handwriting_batch_therapy():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# =============================================================================
-# QUIZ 3 BACKEND ROUTES  —  paste into app.py replacing old versions
-#
-# FIXES vs original:
-#  1. Reads errors from Assessment_Test + Level_Schema (not 'Level' collection)
-#  2. /get_personalized_question_quiz3 uses q_num "1","2","3" matching Kotlin
-#  3. /submit_quiz_answer stores to Quiz → user_id → "Quiz 3" subcollection
-#  4. /api/scores now counts Quiz 3 completions so Levelselection can unlock Level 4
-# =============================================================================
+
 
 import traceback, random
 from flask import request, jsonify
@@ -3210,14 +2842,7 @@ from config.firebase import get_db
 from firebase_admin import firestore
 
 
-# =============================================================================
-# GET /get_personalized_question_quiz3?user_id=...&question_number=1|2|3
-#
-# FIX 1: Added length filter (3-5 chars) when reading from Firestore sources
-#         so single-letter garbage words can never become the target.
-# FIX 2: question_number is now normalised to a string early, so "1"/"2"/"3"
-#         always match regardless of what the client sends.
-# =============================================================================
+
 @app.route('/get_personalized_question_quiz3', methods=['GET'])
 def get_personalized_question_quiz3():
     user_id = request.args.get('user_id')
@@ -3230,7 +2855,6 @@ def get_personalized_question_quiz3():
         db = get_db()
         error_words = []
         
-        # ---> RESOLVE COMPANION STATE ONCE AT INITIALIZATION <---
         user_cartoon = get_user_cartoon_preference(user_id)
 
         try:
@@ -3276,7 +2900,7 @@ def get_personalized_question_quiz3():
             options = build_distractor_options_for_q11(target_word)
             return jsonify({
                 "status": "success",
-                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
+                "cartoon_selection": user_cartoon,
                 "audio_url":   None,
                 "target_word": target_word,
                 "data": [{"target": target_word, "options": options}]
@@ -3286,7 +2910,7 @@ def get_personalized_question_quiz3():
             read_words = find_similar_words_from_csv(target_word, count=4)
             return jsonify({
                 "status": "success",
-                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
+                "cartoon_selection": user_cartoon, 
                 "audio_url":   None,
                 "target_word": target_word,
                 "data":        read_words 
@@ -3297,7 +2921,7 @@ def get_personalized_question_quiz3():
             random.shuffle(rhyme_words)
             return jsonify({
                 "status": "success",
-                "cartoon_selection": user_cartoon, # ---> INJECTED PROFILE HELPER <---
+                "cartoon_selection": user_cartoon, 
                 "audio_url":   None,
                 "target_word": target_word,
                 "data":        rhyme_words 
@@ -3310,19 +2934,7 @@ def get_personalized_question_quiz3():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# =============================================================================
-# POST /submit_quiz_answer
-#
-# FIX: Replaced hardcoded total_questions=4 with a per-distinct-question-number
-#      count so the 75% threshold works correctly when Q2 submits multiple
-#      cards (one attempt per word in the read-aloud stack).
-#
-# Logic:
-#   • Every POST is stored as before (individual attempt document).
-#   • For the pass/fail score we look at the LATEST attempt per question
-#     number (1, 2, 3) — one result per question, not per card.
-#   • 3 questions total; pass = at least 2 correct (≥ 75 % rounds to this).
-# =============================================================================
+
 @app.route('/submit_quiz_answer', methods=['POST'])
 def submit_quiz_answer():
     user_id    = request.form.get('user_id')
@@ -3339,7 +2951,6 @@ def submit_quiz_answer():
                           .document(user_id)
                           .collection('Quiz 3'))
 
-        # 1. Store the individual attempt (unchanged)
         quiz_col_ref.add({
             "word":            target,
             "question_number": int(q_num_str) if q_num_str.isdigit() else 0,
@@ -3347,37 +2958,30 @@ def submit_quiz_answer():
             "timestamp":       firestore.SERVER_TIMESTAMP
         })
 
-        # 2. Calculate score: one result per distinct question number (1, 2, 3).
-        #    For each question we take the LATEST attempt's is_correct value.
-        #    This means Q2 multi-card submissions don't inflate the denominator.
         all_docs = list(quiz_col_ref.stream())
 
-        # Build dict: {question_number -> latest is_correct}
-        # Sort by timestamp if available, otherwise keep last seen.
+     
         from collections import defaultdict
-        latest_per_q = {}   # {q_num_int: is_correct}
+        latest_per_q = {}  
 
         for doc in all_docs:
             data = doc.to_dict() or {}
             qn   = data.get('question_number', 0)
-            if qn not in (1, 2, 3):        # skip the score_summary doc & junk
+            if qn not in (1, 2, 3):        
                 continue
-            ts = data.get('timestamp')      # Firestore Timestamp or None
+            ts = data.get('timestamp')     
 
             if qn not in latest_per_q:
                 latest_per_q[qn] = (ts, data.get('is_correct', False))
             else:
                 prev_ts, _ = latest_per_q[qn]
-                # If both timestamps exist, keep the more recent one
                 if ts is not None and (prev_ts is None or ts > prev_ts):
                     latest_per_q[qn] = (ts, data.get('is_correct', False))
 
-        total_questions  = 3   # Q1, Q2, Q3
+        total_questions  = 3  
         correct_total    = sum(1 for (_, correct) in latest_per_q.values() if correct)
-        # 75% of 3 = 2.25 → need at least 2 correct to pass (floor)
         reaches_75_percent = correct_total >= 2
 
-        # 3. Update score summary
         quiz_col_ref.document('score_summary').set({
             "total_correct":   correct_total,
             "total_questions": total_questions,
@@ -3386,7 +2990,6 @@ def submit_quiz_answer():
             "last_updated":    firestore.SERVER_TIMESTAMP
         }, merge=True)
 
-        # 4. Mark completion in Assessment_Test so Level 4 unlocks
         if reaches_75_percent:
             (db.collection('Assessment_Test')
                .document(user_id)
@@ -3410,9 +3013,7 @@ def submit_quiz_answer():
         return jsonify({"error": str(e)}), 500
 
 
-# =============================================================================
-# GET /api/scores/<user_id>   — Fully aligned with strict sequential gating logic
-# =============================================================================
+
 import traceback
 from flask import jsonify
 
@@ -3421,7 +3022,6 @@ def get_user_score(user_id):
     try:
         db = get_db()
 
-        # ── 1. USER PROFILE HANDSHAKE ──
         user_profile_doc = db.collection('users').document(user_id).get()
         if not user_profile_doc.exists:
             return jsonify({"status": "error", "message": "User profile not found."}), 404
@@ -3440,7 +3040,6 @@ def get_user_score(user_id):
                 "data": []
             }), 200
 
-        # ── 2. BASELINE DATA EXTRACTION (ASSESSMENT FIRST) ──
         assessment_ref = db.collection('Assessment_Test').document(user_id)
         level_root_ref = db.collection('Level').document(user_id)
         quiz_root_ref  = db.collection('Quiz').document(user_id)
@@ -3451,7 +3050,6 @@ def get_user_score(user_id):
 
         level_totals = {'Level_1': 5, 'Level_2': 5, 'Level_3': 5, 'Level_4': 4}
         
-        # Calculate raw scores based on error documents present
         for level_name, total_questions in level_totals.items():
             docs = list(assessment_ref.collection(level_name).stream())
             errors_made = len(docs)
@@ -3466,39 +3064,32 @@ def get_user_score(user_id):
                 "score": f"{correct}/{total_questions}"
             })
 
-        # ── 3. STRICT SEQUENTIAL GATING ENGINE (INITIALIZE VIA ASSESSMENT) ──
         current_max_index = 0
 
-        # Assessment First Priority Rules:
-        # Pass Level 1 (>=3) -> Instantly unlock Quiz 1 (Index 1)
         if assessment_scores.get('Level_1', 0) >= 3:
             current_max_index = 1
             
-            # Pass Level 2 (>=3) -> Instantly unlock Quiz 2 (Index 3)
+        
             if assessment_scores.get('Level_2', 0) >= 3:
                 current_max_index = 3
                 
-                # Pass Level 3 (>=3) -> Instantly unlock Quiz 3 (Index 5)
+               
                 if assessment_scores.get('Level_3', 0) >= 3:
                     current_max_index = 5
 
-        # ── 4. DYNAMIC STAGE STATE EVALUATION ──
-        
-        # Stage 1: Level 1 Mastery (Therapy fallback)
+       
         lvl1_graduated = False
         l1_meta = level_root_ref.collection('Level_1').document('meta_status').get()
         if l1_meta.exists:
             m_data = l1_meta.to_dict() or {}
             lvl1_graduated = m_data.get('graduated', False) or m_data.get('unlocked_level_2', False)
 
-        # Stage 2: Quiz 1 Passed
         quiz1_passed = False
         q1_doc = quiz_root_ref.collection('Quiz 1').document('Score').get()
         if q1_doc.exists:
             q1_data = q1_doc.to_dict() or {}
             quiz1_passed = q1_data.get('passed', False) or (q1_data.get('percentage', 0) >= 75.0) or (q1_data.get('score', 0) >= 3)
 
-        # Stage 3: Level 2 Mastery (Checks both spaced and underscored collections)
         lvl2_graduated = False
         l2_meta = level_root_ref.collection('Level_2').document('meta_status').get()
         if not l2_meta.exists:
@@ -3507,7 +3098,6 @@ def get_user_score(user_id):
         if l2_meta.exists and l2_meta.to_dict().get('graduated', False):
             lvl2_graduated = True
         else:
-            # Dynamic fallback: If Quiz 1 passed, verify if active error targets have been depleted
             l2_docs_spaced = list(level_root_ref.collection('Level 2').stream())
             l2_docs_under  = list(level_root_ref.collection('Level_2').stream())
             active_l2_targets = [d for d in (l2_docs_spaced + l2_docs_under) if d.id != 'meta_status']
@@ -3515,14 +3105,12 @@ def get_user_score(user_id):
             if quiz1_passed and len(active_l2_targets) == 0:
                 lvl2_graduated = True
 
-        # Stage 4: Quiz 2 Passed
         quiz2_passed = False
         q2_summary = quiz_root_ref.collection('Quiz 2').document('score_summary').get()
         if q2_summary.exists:
             q2_data = q2_summary.to_dict() or {}
             quiz2_passed = q2_data.get('passed', False) or (q2_data.get('score', 0) >= 3)
         elif lvl2_graduated:
-            # Verification endpoints delete active target documents inside Quiz 2 upon completion
             q2_docs = list(quiz_root_ref.collection('Quiz 2').stream())
             active_q2_targets = [d for d in q2_docs if d.id != 'score_summary']
             if len(active_q2_targets) == 0:
@@ -3533,19 +3121,16 @@ def get_user_score(user_id):
             "score": f"{'1' if quiz2_passed else '0'}/1"
         })
 
-        # Stage 5: Level 3 Mastery
         lvl3_graduated = False
         l3_meta = level_root_ref.collection('Level_3').document('meta_status').get()
         if l3_meta.exists and l3_meta.to_dict().get('graduated', False):
             lvl3_graduated = True
         else:
-            # Dynamic fallback: Level 3 documents get deleted upon completion
             l3_docs = list(level_root_ref.collection('Level_3').stream())
             active_l3_targets = [d for d in l3_docs if d.id != 'meta_status']
             if quiz2_passed and len(active_l3_targets) == 0:
                 lvl3_graduated = True
 
-        # Stage 6: Quiz 3 Passed
         quiz3_passed = False
         q3_doc = quiz_root_ref.collection('Quiz 3').document('score_summary').get()
         if q3_doc.exists:
@@ -3558,29 +3143,22 @@ def get_user_score(user_id):
             "score_summary": {"passed_75": quiz3_passed}
         })
 
-        # ── 5. LAYER DYNAMIC GAMEPLAY OVERRIDES ──
-        
-        # Apply Level 1 therapy graduation fallback if assessment failed
+    
         if lvl1_graduated and current_max_index < 1:
             current_max_index = 1  
 
-        # Passing Quiz 1 unlocks Level 2
         if quiz1_passed and current_max_index < 2:
             current_max_index = 2  
             
-        # Completing Level 2 therapy folder unlocks Quiz 2
         if lvl2_graduated and current_max_index < 3:
             current_max_index = 3  
 
-        # Passing Quiz 2 independently unlocks Level 3
         if quiz2_passed and current_max_index < 4:
             current_max_index = 4  
             
-        # Completing Level 3 therapy folder unlocks Quiz 3
         if lvl3_graduated and current_max_index < 5:
             current_max_index = 5  
 
-        # Passing Quiz 3 independently unlocks Level 4
         if quiz3_passed and current_max_index < 6:
             current_max_index = 6
 
@@ -3595,8 +3173,7 @@ def get_user_score(user_id):
     except Exception as e:
         print(f"Scores Gating API Error:\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": "Internal evaluation engine faulted"}), 500
-#=============== PROGRESS TRACKING ===========================================
-@app.route('/api/user_progress/<user_id>', methods=['GET'])
+@app.route('/api/user_progr_num_int: is_correct}ess/<user_id>', methods=['GET'])
 def get_user_progress(user_id):
     if not user_id:
         return jsonify({"error": "Missing user_id"}), 400
@@ -3604,55 +3181,44 @@ def get_user_progress(user_id):
     try:
         db = get_db()
         
-        # Define absolute project scopes
         TOTAL_LEVELS = 4.0
         TOTAL_QUIZZES = 3.0
         
         levels_attempted = 0
         quizzes_attempted = 0
 
-        # --- 1. CHECK LEVEL ATTEMPTS ---
-        # Level 1 check
         l1_doc = db.collection('Level').document(user_id).collection('Level_1').document('meta_status').get()
         if l1_doc.exists or len(list(db.collection('Level').document(user_id).collection('Level_1').limit(1).stream())) > 0:
             levels_attempted += 1
 
-        # Level 2 check
         l2_docs = list(db.collection('Level').document(user_id).collection('Level 2').limit(1).stream())
         if len(l2_docs) > 0:
             levels_attempted += 1
 
-        # Level 3 check
         l3_docs = list(db.collection('Level').document(user_id).collection('Level_3').limit(1).stream())
         if len(l3_docs) > 0:
             levels_attempted += 1
 
-        # Level 4 check
         l4_doc = db.collection('Level').document(user_id).collection('Level_4').document('meta_status').get()
         if l4_doc.exists or len(list(db.collection('Level').document(user_id).collection('Level_4').limit(1).stream())) > 0:
             levels_attempted += 1
 
-        # --- 2. CHECK QUIZ ATTEMPTS ---
-        # Quiz 1 check
+     
         q1_doc = db.collection('Quiz').document(user_id).collection('Quiz 1').document('Score').get()
         if q1_doc.exists:
             quizzes_attempted += 1
 
-        # Quiz 2 check
         q2_docs = list(db.collection('Quiz').document(user_id).collection('Quiz 2').limit(1).stream())
         if len(q2_docs) > 0:
             quizzes_attempted += 1
 
-        # Quiz 3 check
         q3_docs = list(db.collection('Quiz').document(user_id).collection('Quiz 3').limit(1).stream())
         if len(q3_docs) > 0:
             quizzes_attempted += 1
 
-        # --- 3. CALCULATE METRICS ---
         level_progress_float = levels_attempted / TOTAL_LEVELS
         quiz_progress_float = quizzes_attempted / TOTAL_QUIZZES
         
-        # Overall completion weights: Levels account for 60%, Quizzes 40%
         overall_percentage = int(((level_progress_float * 0.6) + (quiz_progress_float * 0.4)) * 100)
 
         return jsonify({
