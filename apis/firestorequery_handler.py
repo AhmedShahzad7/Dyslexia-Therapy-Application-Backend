@@ -228,7 +228,7 @@ def update_therapy_progress(user_id, target_word, is_correct, question_number, l
         current_success += 1
         print(f"(VALIDATION) User={user_id} evaluated correctly for Q{question_number}. Streak metric: {current_success}/3")
         
-        if current_success >= 3: 
+    
         if current_success >= 3: 
             active_doc_ref.delete()
             print(f"(VALIDATION) Task {question_number} fully mastered and dropped from primary storage structures.")

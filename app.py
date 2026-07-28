@@ -1064,8 +1064,8 @@ def generate_typecast_audio(text, filename, cartoon_name="doraemon"):
         response = typecast_client.text_to_speech(TTSRequest(
             text=spoken_text,
             model="ssfm-v30",
-            voice_id=voice_id 
-            voice_id=voice_id 
+            voice_id=voice_id,
+            
         ))
 
         filepath = os.path.join(AUDIO_DIR, filename)
@@ -1493,7 +1493,7 @@ def generate_quiz1():
                 q_type = "MCQ"
                 instruction_text = "Click the direction of the given arrow"
                 audio_filename = f"cached_identify_v2_down.wav"
-            else: 
+
             else: 
                 q_type = "MCQ"
                 instruction_text = "Match the arrow to the correct word"
@@ -2982,7 +2982,7 @@ def submit_quiz_answer():
         for doc in all_docs:
             data = doc.to_dict() or {}
             qn   = data.get('question_number', 0)
-            if qn not in (1, 2, 3):        
+                   
             if qn not in (1, 2, 3):        
                 continue
             ts = data.get('timestamp')     
